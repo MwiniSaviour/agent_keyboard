@@ -30,6 +30,25 @@ export function ContextPanel() {
 
   const refine = (style: RefineStyle) => controller.refine(style);
   const lastThem = ctx?.chat?.messages.filter((m) => m.from === 'them').at(-1);
+  const selection = ctx?.text?.selection;
+
+  // Context-relevant actions first; the single best one for this screen carries the primary weight.
+  const act: Array<{ label: string; run: () => void }> = [];
+  if (ctx?.chat) act.push({ label: 'Draft reply', run: () => controller.runAgent('reply', 'conversation') });
+  if (ctx?.form) act.push({ label: 'Fill form', run: () => controller.runAgent('fill_form', 'screen') });
+  if (selection) act.push({ label: 'Define word', run: () => controller.runAgent('define', 'word', { word: selection }) });
+  const understand: Array<{ label: string; run: () => void }> = [
+    { label: 'Explain screen', run: () => controller.runAgent('explain', 'screen') },
+    { label: 'Summarize', run: () => controller.runAgent('summarize', 'screen') },
+    { label: 'Describe image', run: () => controller.runAgent('describe_image', 'image') },
+  ];
+  const primary = act[0]?.label ?? 'Explain screen';
+
+  const actionButton = (a: { label: string; run: () => void }) => (
+    <button type="button" key={a.label} className={css.action} data-primary={a.label === primary} onClick={a.run}>
+      {a.label}
+    </button>
+  );
 
   return (
     <section className={css.panel} role="dialog" aria-label="Screen context">
@@ -43,73 +62,38 @@ export function ContextPanel() {
       <div className={css.panelBody}>
         {ctx ? (
           <>
-            <div className={css.ctxGrid}>
-              <div className={css.ctxCell}>
-                App<b>{ctx.app.label}</b>
-              </div>
-              <div className={css.ctxCell}>
-                Screen<b style={{ textTransform: 'capitalize' }}>{ctx.screenType}</b>
-              </div>
-              <div className={css.ctxCell}>
-                Focused field<b>{ctx.field.hint ?? ctx.field.kind}</b>
-              </div>
-              <div className={css.ctxCell}>
-                Source<b>{RUNG_LABEL[ctx.rung]}</b>
-              </div>
-              {ctx.chat ? (
-                <div className={css.ctxCell} style={{ gridColumn: '1 / -1' }}>
-                  Last from {ctx.chat.title}
-                  <b>{lastThem ? `“${lastThem.text}”` : '—'}</b>
-                </div>
-              ) : null}
-              {ctx.form ? (
-                <div className={css.ctxCell} style={{ gridColumn: '1 / -1' }}>
-                  {ctx.form.title}
-                  <b>
-                    {ctx.form.fields.length} fields · {ctx.form.fields.filter((f) => f.kind === 'password').length} protected
-                  </b>
-                </div>
-              ) : null}
-              {ctx.text ? (
-                <div className={css.ctxCell} style={{ gridColumn: '1 / -1' }}>
-                  {ctx.text.selection ? 'Selected on screen' : 'Text on screen'}
-                  <b>{ctx.text.selection ? `“${ctx.text.selection}”` : `${ctx.text.body.split(/\s+/).length} words · ${ctx.text.title}`}</b>
-                </div>
-              ) : null}
+            <p className={css.ctxSummary}>
+              <b>{ctx.app.label}</b>
+              <span aria-hidden>·</span>
+              <span style={{ textTransform: 'capitalize' }}>{ctx.screenType}</span>
+              <span aria-hidden>·</span>
+              <span>
+                <b>{ctx.field.hint ?? ctx.field.kind}</b> field
+              </span>
+              <span aria-hidden>·</span>
+              <span>via {RUNG_LABEL[ctx.rung].toLowerCase()}</span>
+            </p>
+            {lastThem ? (
+              <p className={css.ctxQuote}>
+                <small>Last from {ctx.chat?.title}</small>“{lastThem.text}”
+              </p>
+            ) : ctx.form ? (
+              <p className={css.ctxQuote}>
+                <small>{ctx.form.title}</small>
+                {ctx.form.fields.length} fields · {ctx.form.fields.filter((f) => f.kind === 'password').length} protected (never filled)
+              </p>
+            ) : ctx.text ? (
+              <p className={css.ctxQuote}>
+                <small>{selection ? 'Selected on screen' : ctx.text.title}</small>
+                {selection ? `“${selection}”` : `${ctx.text.body.split(/\s+/).length} words on screen`}
+              </p>
+            ) : null}
+
+            <div className={css.actionGrid} style={{ marginTop: 8 }}>
+              {[...act, ...understand].slice(0, 6).map(actionButton)}
             </div>
 
-            <div className={css.sectionLabel}>Understand</div>
-            <div className={css.actionGrid}>
-              <button type="button" className={css.action} onClick={() => controller.runAgent('explain', 'screen')}>
-                Explain screen
-              </button>
-              <button type="button" className={css.action} onClick={() => controller.runAgent('summarize', 'screen')}>
-                Summarize
-              </button>
-              <button
-                type="button"
-                className={css.action}
-                disabled={!ctx.text?.selection}
-                onClick={() => controller.runAgent('define', 'word', { word: ctx.text?.selection ?? '' })}
-              >
-                Define word
-              </button>
-            </div>
-
-            <div className={css.sectionLabel}>Act</div>
-            <div className={css.actionGrid}>
-              <button type="button" className={css.action} disabled={!ctx.chat} onClick={() => controller.runAgent('reply', 'conversation')}>
-                Draft reply
-              </button>
-              <button type="button" className={css.action} disabled={!ctx.form} onClick={() => controller.runAgent('fill_form', 'screen')}>
-                Fill form
-              </button>
-              <button type="button" className={css.action} onClick={() => controller.runAgent('describe_image', 'image')}>
-                Describe image
-              </button>
-            </div>
-
-            <div className={css.sectionLabel}>Write</div>
+            <div className={css.sectionLabel}>Rewrite what you typed</div>
             <div className={css.actionGrid}>
               {(
                 [
@@ -123,6 +107,7 @@ export function ContextPanel() {
                 </button>
               ))}
             </div>
+            {!hasText ? <p className={css.meta}>Type something first to rewrite it.</p> : null}
           </>
         ) : (
           <p className={css.itemSub}>Reading screen…</p>

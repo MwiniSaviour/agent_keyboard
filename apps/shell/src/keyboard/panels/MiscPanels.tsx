@@ -4,6 +4,7 @@ import { useState } from 'react';
 import type { AutonomyLevel } from '@ak/protocol';
 import { updateSetting, useSetting, type KeyboardHeight, type KeyboardSettings } from '@/lib/settings';
 import { BackspaceIcon, CheckIcon, CloseIcon, MicIcon, PinIcon, PlusIcon, ShieldIcon } from '@/ui/icons';
+import { agentMonogram } from '@/agents/monogram';
 import { useShell, useShellState } from '../context';
 import css from '../keyboard.module.css';
 
@@ -41,7 +42,9 @@ export function AgentsPanel() {
               className={css.listItem}
               onClick={() => controller.selectAgent(a.id)}
             >
-              <span className={css.avatar}>{a.icon}</span>
+              <span className={css.avatar} aria-hidden>
+                {agentMonogram(a)}
+              </span>
               <span className={css.itemText}>
                 <span className={css.itemTitle}>{a.name}</span>
                 <span className={css.itemSub} style={{ display: 'block' }}>
@@ -78,15 +81,19 @@ export function ClipboardPanel() {
   const quick = agent?.quickReplies ?? [];
   return (
     <section className={css.panel} role="dialog" aria-label="Clipboard and quick replies">
-      <PanelHead title={tab === 'quick' ? `${agent?.name ?? 'Agent'} · quick replies` : 'Clipboard'} />
-      <div className={css.chipRow} role="tablist">
-        <button type="button" role="tab" className={css.chip} aria-pressed={tab === 'quick'} onClick={() => setTab('quick')}>
-          Quick replies
+      <header className={css.tabHead}>
+        <div className={css.tabList} role="tablist" aria-label={`${agent?.name ?? 'Agent'} quick replies and clipboard`}>
+          <button type="button" role="tab" className={css.chip} aria-selected={tab === 'quick'} aria-pressed={tab === 'quick'} onClick={() => setTab('quick')}>
+            {agent?.name ?? 'Agent'} replies
+          </button>
+          <button type="button" role="tab" className={css.chip} aria-selected={tab === 'clipboard'} aria-pressed={tab === 'clipboard'} onClick={() => setTab('clipboard')}>
+            Clipboard
+          </button>
+        </div>
+        <button type="button" className={css.btnIcon} onClick={() => controller.closePanel()} aria-label="Close">
+          <CloseIcon size={18} />
         </button>
-        <button type="button" role="tab" className={css.chip} aria-pressed={tab === 'clipboard'} onClick={() => setTab('clipboard')}>
-          Clipboard
-        </button>
-      </div>
+      </header>
       <div className={css.panelBody}>
         <div className={css.list}>
           {tab === 'quick' ? (
@@ -102,7 +109,9 @@ export function ClipboardPanel() {
                 </button>
               ))
             ) : (
-              <p className={css.itemSub}>This agent has no quick replies yet. Add them in the agent editor.</p>
+              <p className={css.itemSub} style={{ whiteSpace: 'normal' }}>
+                {agent?.name ?? 'This agent'} has no quick replies yet. Add one-tap messages in the agent editor.
+              </p>
             )
           ) : (
             clipboard.map((c) => (
@@ -142,6 +151,9 @@ function Toggle({ k, label }: { k: keyof KeyboardSettings; label: string }) {
   );
 }
 
+const HEIGHT_SHORT: Record<KeyboardHeight, string> = { compact: 'S', normal: 'M', tall: 'L', xl: 'XL' };
+const HEIGHT_NAME: Record<KeyboardHeight, string> = { compact: 'Compact', normal: 'Normal', tall: 'Tall', xl: 'Extra tall' };
+
 export function SettingsPanel() {
   const { controller } = useShell();
   const theme = useSetting('theme');
@@ -165,8 +177,8 @@ export function SettingsPanel() {
           <span>Height</span>
           <div className={css.seg}>
             {(['compact', 'normal', 'tall', 'xl'] as KeyboardHeight[]).map((h) => (
-              <button type="button" key={h} aria-pressed={height === h} onClick={() => updateSetting('height', h)}>
-                {h === 'xl' ? 'XL' : h[0]!.toUpperCase() + h.slice(1, 4)}
+              <button type="button" key={h} aria-pressed={height === h} aria-label={HEIGHT_NAME[h]} title={HEIGHT_NAME[h]} onClick={() => updateSetting('height', h)}>
+                {HEIGHT_SHORT[h]}
               </button>
             ))}
           </div>
@@ -275,31 +287,31 @@ export function VoicePanel() {
 
 export function ConsentPanel() {
   const { controller } = useShell();
+  const agent = useShellState((s) => s.agents.find((a) => a.id === s.activeAgentId));
+  const canSend = agent?.autonomyCeiling === 'auto';
   const [level, setLevel] = useState<AutonomyLevel>('draft');
+  const name = agent?.name ?? 'Your agent';
   return (
-    <section className={css.panel} role="dialog" aria-label="Enable autonomous mode">
-      <PanelHead title="Autonomous mode" icon={<ShieldIcon size={18} />} />
+    <section className={css.panel} role="dialog" aria-label="Turn on Autopilot">
+      <PanelHead title="Turn on Autopilot" icon={<ShieldIcon size={18} />} />
       <div className={css.panelBody}>
-        <p style={{ margin: '0 0 6px', fontSize: 14 }}>
-          Your agent reads this conversation or form <b>on this device</b> and replies or fills it for you while the keyboard is open.
+        <p className={css.consentLead}>
+          <b>{name}</b> replies to chats and fills forms for you while the keyboard is open, on this device.
         </p>
-        <ul className={css.bullets}>
-          <li>Touch any key to take over instantly.</li>
-          <li>Never acts in password, OTP or payment fields.</li>
-          <li>Stops and asks you about money, credentials or commitments.</li>
-          <li>Rate-limited, logged locally, and forms are never auto-submitted.</li>
-        </ul>
-        <div className={css.setRow} style={{ borderBottom: 0, marginTop: 6 }}>
-          <span>Level</span>
-          <div className={css.seg}>
-            <button type="button" aria-pressed={level === 'draft'} onClick={() => setLevel('draft')}>
-              Draft (I send)
-            </button>
-            <button type="button" aria-pressed={level === 'auto'} onClick={() => setLevel('auto')}>
-              Auto-send
-            </button>
-          </div>
+        <div className={css.levelPick} role="group" aria-label="What Autopilot may do">
+          <button type="button" aria-pressed={level === 'draft'} onClick={() => setLevel('draft')}>
+            Draft
+            <small>Writes it, you send</small>
+          </button>
+          <button type="button" aria-pressed={level === 'auto'} disabled={!canSend} onClick={() => setLevel('auto')}>
+            Auto-send
+            <small>{canSend ? 'Sends for you' : `${name} only drafts`}</small>
+          </button>
         </div>
+        <p className={css.bullets}>
+          Touch any key to take over. It never acts in password, OTP or payment fields, never submits forms, and asks you
+          about money or commitments.
+        </p>
       </div>
       <footer className={css.panelFoot}>
         <button type="button" className={css.btnGhost} onClick={() => controller.closePanel()}>

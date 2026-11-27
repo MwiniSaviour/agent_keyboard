@@ -71,16 +71,19 @@ export function Keyboard({ bridge, floating, theme, physicalKeys }: KeyboardProp
 
   const resolved = useResolvedTheme();
   const height = useSetting('height');
+  // Panels take over the strip area too, unless Autopilot is on: its status + Stop must stay visible.
+  const stripVisible = useStore(value.store, (s) => s.panel === 'none' || s.autonomy.enabled);
 
   return (
     <ShellContext.Provider value={value}>
       <div
         className={`${css.board} ${floating ? css.floating : ''}`}
         data-ak-theme={theme ?? resolved}
+        data-strip={stripVisible}
         style={{ ['--key-h' as string]: `${KEY_HEIGHT_PX[height]}px` }}
       >
         <AgentBar />
-        <InsightStrip />
+        {stripVisible ? <InsightStrip /> : null}
         <Body />
         <Toast />
       </div>

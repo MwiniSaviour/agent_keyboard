@@ -38,15 +38,38 @@ select {
 }
 
 :focus-visible {
-  outline: 2px solid currentColor;
+  outline: 2px solid var(--focus, currentColor);
   outline-offset: 2px;
 }
 
+/* Browser surfaces carry the palette too (selection, caret, native controls). */
+[data-ak-theme] ::selection {
+  background: var(--selection);
+}
+[data-ak-theme] {
+  caret-color: var(--board-fg);
+  accent-color: var(--board-fg);
+}
+::placeholder {
+  color: var(--placeholder, #6b6b6b);
+  opacity: 1;
+}
+
+p,
+li {
+  text-wrap: pretty;
+}
+
+/*
+ * Reduced motion: state changes stay visible but nothing travels or loops. A bare 1ms duration on an
+ * infinite animation strobes at frame rate, so looping animations are capped to one silent iteration.
+ */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
   *::after {
     animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
     transition-duration: 1ms !important;
   }
 }

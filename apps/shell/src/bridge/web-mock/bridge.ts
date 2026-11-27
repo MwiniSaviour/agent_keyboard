@@ -339,7 +339,7 @@ export class WebMockBridge implements NativeBridge {
     this.autonomy = { ...this.autonomy, enabled: p.enabled, level: p.level, agentId: p.agentId };
     if (!p.enabled) return this.setPhase('off');
     const field = this.host.field();
-    if (!field || field.sensitive) return this.setPhase('paused', 'Protected field — autonomy unavailable');
+    if (!field || field.sensitive) return this.setPhase('paused', 'protected field');
     this.setPhase('arming');
     setTimeout(() => {
       if (!this.autonomy.enabled) return;

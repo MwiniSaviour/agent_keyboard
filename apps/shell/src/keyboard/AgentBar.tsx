@@ -34,8 +34,9 @@ export function AgentBar() {
         disabled={secure}
         role="switch"
         aria-checked={autoOn}
-        aria-label="Autonomous mode"
-        style={secure ? { opacity: 0.35 } : undefined}
+        aria-label="Autopilot"
+        title={secure ? 'Autopilot is off in protected fields' : undefined}
+        style={secure ? { opacity: 0.4 } : undefined}
       >
         <span className={css.autoLabel}>AUTO</span>
         <span className={css.toggle} data-on={autoOn} />

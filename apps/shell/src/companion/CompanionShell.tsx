@@ -11,7 +11,7 @@ const NAV = [
   { href: '/agents/', label: 'Agents' },
   { href: '/models/', label: 'Models' },
   { href: '/settings/', label: 'Settings' },
-  { href: '/', label: 'Try keyboard' },
+  { href: '/', label: 'Keyboard' },
 ];
 
 export function CompanionShell({
@@ -33,7 +33,7 @@ export function CompanionShell({
   }, []);
   const theme = useResolvedTheme();
   return (
-    <main className={css.page} data-theme={theme}>
+    <main className={css.page} data-ak-theme={theme}>
       <div className={css.wrap}>
         <header className={css.top}>
           {back ? (
@@ -44,7 +44,7 @@ export function CompanionShell({
           <h1 className={css.title}>{title}</h1>
         </header>
         {active ? (
-          <nav className={css.tabs}>
+          <nav className={css.tabs} aria-label="Sections">
             {NAV.map((n) => (
               <Link key={n.href} href={n.href} aria-current={active === n.href ? 'page' : undefined}>
                 {n.label}

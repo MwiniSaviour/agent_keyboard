@@ -121,13 +121,13 @@ await sleep(200);
 await page.screenshot({ path: `${shots}/04b-agents.png` });
 await clickText('[role="option"]', 'Sales Bot');
 await sleep(200);
-await page.click('[aria-label="Autonomous mode"]');
+await page.click('[aria-label="Autopilot"]');
 await sleep(200);
 await page.screenshot({ path: `${shots}/05-consent.png` });
 await clickText('button', 'Auto-send');
 await clickText('button', 'Turn on');
 await sleep(400);
-const autoOn = await page.$eval('[aria-label="Autonomous mode"]', (e) => e.getAttribute('aria-checked'));
+const autoOn = await page.$eval('[aria-label="Autopilot"]', (e) => e.getAttribute('aria-checked'));
 check('autonomy on', autoOn === 'true');
 const before = await page.$$eval('[class*="bubbleMe"]', (els) => els.length);
 await clickText('button', 'Jane sends');
@@ -149,7 +149,7 @@ for (let i = 0; i < 30; i++) {
 const mine = await page.$$eval('[class*="bubbleMe"]', (els) => els.map((e) => e.textContent));
 check('PIN escalation', /needs you/i.test(strip), JSON.stringify(strip) + ' sent=' + mine.length);
 await page.screenshot({ path: `${shots}/08-escalated.png` });
-await page.click('[aria-label="Autonomous mode"]').catch(() => {});
+await page.click('[aria-label="Autopilot"]').catch(() => {});
 
 // Article: define exigent
 await clickText('[role="tab"]', 'Essay');

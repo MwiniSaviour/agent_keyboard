@@ -3,7 +3,7 @@
  * Insight strip (FR-UI-02 / FR-UI-10). Priority:
  *   autopilot status > protected-field notice > suggestions (while typing) > insight pill > next-word.
  */
-import type { AutonomyPhase } from '@ak/protocol';
+import type { AutonomyLevel, AutonomyPhase } from '@ak/protocol';
 import { ChevronRight, LockIcon, StopIcon } from '@/ui/icons';
 import { useShell, useShellState } from './context';
 import css from './keyboard.module.css';
@@ -11,16 +11,24 @@ import css from './keyboard.module.css';
 const PHASE_TEXT: Record<AutonomyPhase, string> = {
   off: '',
   arming: 'Autopilot arming…',
-  observing: 'Autopilot · watching this chat',
+  observing: 'Autopilot · watching this screen',
   planning: 'Autopilot · thinking',
   review: 'Autopilot · checking reply',
-  typing: 'Autopilot · replying as you',
+  typing: 'Autopilot · writing a reply',
   awaiting_user: 'Draft ready · tap return to send',
   sending: 'Autopilot · sending',
   cooldown: 'Autopilot · sent',
   paused: 'Autopilot paused',
   escalated: 'Needs you',
 };
+
+const ORDER: AutonomyLevel[] = ['off', 'suggest', 'draft', 'auto'];
+
+/** What Autopilot will actually do: the user's level capped by the agent's ceiling (FR-AU-01). */
+function effectiveLevel(level: AutonomyLevel, ceiling: AutonomyLevel | undefined): AutonomyLevel {
+  if (!ceiling) return level;
+  return ORDER[Math.min(ORDER.indexOf(level), ORDER.indexOf(ceiling))]!;
+}
 
 export function InsightStrip() {
   const { controller } = useShell();
@@ -29,6 +37,9 @@ export function InsightStrip() {
   const suggestions = useShellState((s) => s.suggestions);
   const insight = useShellState((s) => s.insight);
   const typing = useShellState((s) => s.editor.before.length + s.editor.after.length > 0);
+  const sends = useShellState(
+    (s) => effectiveLevel(s.autonomy.level, s.agents.find((a) => a.id === s.activeAgentId)?.autonomyCeiling) === 'auto',
+  );
 
   if (autonomy.enabled && autonomy.phase !== 'off') {
     const text =
@@ -36,9 +47,13 @@ export function InsightStrip() {
         ? `Needs you · ${autonomy.detail ?? 'sensitive request'}`
         : autonomy.phase === 'awaiting_user'
           ? (autonomy.detail ?? PHASE_TEXT.awaiting_user)
-          : autonomy.detail && autonomy.phase !== 'typing'
-          ? `${PHASE_TEXT[autonomy.phase]} · ${autonomy.detail}`
-          : PHASE_TEXT[autonomy.phase];
+          : autonomy.phase === 'typing'
+            ? sends
+              ? 'Autopilot · replying as you'
+              : 'Autopilot · drafting · you send'
+            : autonomy.detail
+              ? `${PHASE_TEXT[autonomy.phase]} · ${autonomy.detail}`
+              : PHASE_TEXT[autonomy.phase];
     return (
       <div className={css.strip} aria-live="polite">
         <div className={css.insight} role="status">

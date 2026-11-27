@@ -1,6 +1,7 @@
 'use client';
 import Link from 'next/link';
 import { GENERAL_AGENT_ID } from '@/agents/defaults';
+import { agentMonogram } from '@/agents/monogram';
 import { useAgents } from '@/agents/repository';
 import { ChevronRight, PlusIcon } from '@/ui/icons';
 import { CompanionShell } from './CompanionShell';
@@ -27,7 +28,9 @@ function List() {
       <div className={css.list}>
         {agents.map((a) => (
           <Link key={a.id} href={`/agents/edit/?id=${encodeURIComponent(a.id)}`} className={css.item}>
-            <span className={css.avatar}>{a.icon}</span>
+            <span className={css.avatar} aria-hidden>
+              {agentMonogram(a)}
+            </span>
             <span className={css.grow}>
               <div className={css.name}>{a.name}</div>
               <div className={css.muted}>{a.tagline}</div>

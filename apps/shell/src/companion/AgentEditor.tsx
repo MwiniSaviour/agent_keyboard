@@ -9,6 +9,7 @@ import { AGENT_ROLE_MAX_CHARS, type AgentDefinition, type AgentTone, type Autono
 import { GENERAL_AGENT_ID } from '@/agents/defaults';
 import { agentRepository, validateDraft, type AgentDraft } from '@/agents/repository';
 import { uid } from '@/lib/store';
+import { agentMonogram } from '@/agents/monogram';
 import { CloseIcon, PlusIcon } from '@/ui/icons';
 import css from './companion.module.css';
 
@@ -31,7 +32,7 @@ const MAX_FILE_BYTES = 20 * 1024 * 1024;
 
 const emptyDraft = (): AgentDraft => ({
   name: '',
-  icon: '✦',
+  icon: '',
   tagline: '',
   role: '',
   tone: 'friendly',
@@ -101,12 +102,13 @@ export function AgentEditor({ agent }: { agent?: AgentDefinition }) {
         </label>
         <div className={css.row} style={{ flexWrap: 'nowrap' }}>
           <input
-            className={css.field}
-            style={{ width: 58, textAlign: 'center', flex: 'none' }}
+            className={`${css.field} ${css.monogram}`}
             value={d.icon}
+            placeholder={agentMonogram({ icon: '', name: d.name || 'Agent' })}
             maxLength={2}
-            aria-label="Icon"
-            onChange={(e) => set('icon', e.target.value || '✦')}
+            aria-label="Avatar letters (optional)"
+            title="1–2 letters shown on the avatar. Leave empty to use the initials."
+            onChange={(e) => set('icon', e.target.value.trim())}
           />
           <input id="name" className={css.field} placeholder="e.g. Sales Bot" value={d.name} maxLength={40} disabled={isGeneral} onChange={(e) => set('name', e.target.value)} />
         </div>
@@ -126,7 +128,7 @@ export function AgentEditor({ agent }: { agent?: AgentDefinition }) {
           value={d.role}
           onChange={(e) => set('role', e.target.value)}
         />
-        <div className={css.counter} style={over ? { color: '#b00020' } : undefined}>
+        <div className={css.counter} style={over ? { color: 'var(--danger)' } : undefined}>
           {d.role.length.toLocaleString()}/{AGENT_ROLE_MAX_CHARS.toLocaleString()}
         </div>
       </section>

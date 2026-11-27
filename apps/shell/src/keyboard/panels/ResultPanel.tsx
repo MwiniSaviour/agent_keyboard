@@ -47,9 +47,7 @@ export function ResultPanel() {
   return (
     <section className={css.panel} role="dialog" aria-label={`${SKILL_TITLE[run.req.skill]} result`}>
       <header className={css.panelHead}>
-        <span className={css.agentTag}>
-          <span aria-hidden>{agent?.icon ?? '●'}</span> {agent?.name ?? 'General'}
-        </span>
+        <span className={css.agentTag}>{agent?.name ?? 'General'}</span>
         <span className={css.grow}>{SKILL_TITLE[run.req.skill]}</span>
         <button type="button" className={css.btnIcon} onClick={() => controller.closePanel()} aria-label="Close">
           <CloseIcon size={18} />
@@ -73,7 +71,6 @@ export function ResultPanel() {
       ) : null}
 
       <div className={css.panelBody} aria-live="polite">
-        <div className={css.resultLabel}>Result</div>
         {run.status === 'error' ? (
           <p className={css.error}>{run.error}</p>
         ) : (

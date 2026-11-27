@@ -19,8 +19,8 @@ interface Pack {
 
 const PACKS: Record<DeviceTier, Pack[]> = {
   S: [
-    { id: 'llm-s', name: 'Gemma 3 1B · int4', role: 'Text: replies, refine, explain', mb: 680, required: true, note: 'Bake-off vs Qwen3-0.6B (§19.5)' },
-    { id: 'emb', name: 'EmbeddingGemma 300M · int8 @256d', role: 'Memory & learning resources', mb: 180, required: true },
+    { id: 'llm-s', name: 'Gemma 3 1B · int4', role: 'Text: replies, refine, explain', mb: 680, required: true },
+    { id: 'emb', name: 'EmbeddingGemma 300M · int8', role: 'Memory & learning resources', mb: 180, required: true },
     { id: 'stt-s', name: 'Zipformer streaming 20M (EN)', role: 'Voice typing', mb: 73, required: true },
     { id: 'dict', name: 'English dictionary + n-gram', role: 'Suggestions, autocorrect', mb: 12, required: true },
     { id: 'vlm-s', name: 'FastVLM 0.5B', role: 'Image understanding (on demand)', mb: 560, required: false, note: 'Loaded exclusively; OCR covers most screens' },

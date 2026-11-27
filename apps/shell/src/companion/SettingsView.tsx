@@ -56,7 +56,7 @@ function Body() {
             ))}
           </div>
         </div>
-        <div className={css.setRow}>
+        <div className={css.setRowStack}>
           <span>Keyboard height</span>
           <div className={css.seg}>
             {(['compact', 'normal', 'tall', 'xl'] as KeyboardHeight[]).map((h) => (
@@ -82,7 +82,7 @@ function Body() {
             Long-press delay
             <div className={css.muted}>{longPress} ms</div>
           </span>
-          <input type="range" min={200} max={600} step={50} value={longPress} onChange={(e) => updateSetting('longPressMs', Number(e.target.value))} aria-label="Long-press delay" />
+          <input type="range" className={css.range} min={200} max={600} step={50} value={longPress} onChange={(e) => updateSetting('longPressMs', Number(e.target.value))} aria-label="Long-press delay" />
         </div>
       </section>
 

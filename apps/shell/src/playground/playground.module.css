@@ -2,7 +2,7 @@
   display: grid;
   place-items: center;
   min-height: 100dvh;
-  color: #777;
+  color: #666;
 }
 
 .page {
@@ -220,7 +220,7 @@
   min-width: 0;
 }
 .appTitle small {
-  color: #777;
+  color: #666;
   font-size: 12px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -229,7 +229,7 @@
 .appTag {
   margin-left: auto;
   font-size: 11px;
-  color: #777;
+  color: #666;
   border: 1px solid #e2e2df;
   border-radius: 999px;
   padding: 3px 8px;
@@ -254,8 +254,8 @@
 .bubbleThem time,
 .bubbleMe time {
   display: block;
-  font-size: 10px;
-  opacity: 0.55;
+  font-size: 11px;
+  opacity: 0.66;
   margin-top: 2px;
   text-align: right;
 }
@@ -316,7 +316,7 @@
   line-height: 1.4;
 }
 .placeholder {
-  color: #999;
+  color: #6e6e6e;
 }
 .caret {
   display: inline-block;
@@ -325,7 +325,13 @@
   margin: 0 -1px;
   vertical-align: text-bottom;
   background: #0a0a0a;
+  /* Emulates the host app's native caret so the focused field is obvious in the preview. */
   animation: blink 1s steps(2) infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .caret {
+    animation: none;
+  }
 }
 @keyframes blink {
   50% { opacity: 0; }

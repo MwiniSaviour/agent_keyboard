@@ -304,7 +304,7 @@ export class KeyboardController {
 
   toggleAutonomy(): void {
     const s = this.store.get();
-    if (s.field?.sensitive) return this.toast('Autonomy is unavailable in protected fields');
+    if (s.field?.sensitive) return this.toast('Autopilot is off in protected fields');
     if (!s.autonomy.enabled && !s.autonomy.consent) return this.store.set({ panel: 'consent' });
     const enabled = !s.autonomy.enabled;
     this.store.set({ autonomy: { ...s.autonomy, enabled, phase: enabled ? 'arming' : 'off', detail: null } });

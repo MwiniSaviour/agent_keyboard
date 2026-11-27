@@ -118,7 +118,10 @@ export interface AgentDefinition {
   id: string;
   kind: 'general' | 'custom';
   name: string;
-  /** Single glyph or emoji used as the agent's avatar. */
+  /**
+   * Optional 1–2 character monogram for the avatar (e.g. "Aa"). Empty → derived from `name`.
+   * Rendered as text in the UI font, never as an emoji/symbol glyph (consistent across OEM fonts).
+   */
   icon: string;
   /** One-line description shown in the switcher. */
   tagline: string;

@@ -13,7 +13,7 @@ export const DEFAULT_AGENTS: AgentDefinition[] = [
     id: GENERAL_AGENT_ID,
     kind: 'general',
     name: 'General',
-    icon: '●',
+    icon: '',
     tagline: 'Knows you. Writes like you. Always on.',
     role:
       'You are the user’s personal writing agent. Mirror their tone, length and language from the style card. ' +
@@ -36,7 +36,7 @@ export const DEFAULT_AGENTS: AgentDefinition[] = [
     id: 'sales',
     kind: 'custom',
     name: 'Sales Bot',
-    icon: '◆',
+    icon: '',
     tagline: 'Pricing, offers and closing — on brand.',
     role:
       'You are a friendly, concise sales assistant for Blossom Beauty (natural skincare, Kumasi). ' +
@@ -84,7 +84,7 @@ export const DEFAULT_AGENTS: AgentDefinition[] = [
     id: 'support',
     kind: 'custom',
     name: 'Support',
-    icon: '✚',
+    icon: '',
     tagline: 'Calm, empathetic customer care.',
     role:
       'You handle customer support. Acknowledge the issue, apologise once, give one concrete next step, ' +

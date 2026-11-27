@@ -92,7 +92,11 @@
   background: var(--toggle-knob);
   transition: transform var(--dur-med) var(--ease-out);
 }
+.toggle[data-on='true'] {
+  background: var(--toggle-border);
+}
 .toggle[data-on='true']::after {
+  background: var(--toggle-track);
   transform: translateX(18px);
 }
 .barIcons {
@@ -246,13 +250,17 @@
 .label {
   pointer-events: none;
 }
+/* Character labels sit 2px low so corner hints clear ascenders (h, k, l, b, d). */
+.key:not([data-role='mod']) .label:not(.wide) {
+  transform: translateY(2px);
+}
 .wide {
   font-size: 18px;
 }
 .hint {
   position: absolute;
-  top: 4px;
-  right: 6px;
+  top: 3px;
+  right: 4px;
   font-size: 11px;
   line-height: 1;
   color: var(--key-hint);
@@ -281,22 +289,30 @@
 }
 
 /* ───────────── Panels (occupy the key-grid area, FR-UI-09) ───────────── */
+/* Panel height = key grid (4 rows + 3×10px gaps) + the strip it replaces (40px + 2px/8px margins; 2px kept as margin-top), so
+   opening a panel never changes the keyboard height. With the strip visible, only the grid area. */
 .panel {
+  --panel-h: calc(var(--key-h) * 4 + 30px + var(--strip-h) + 8px);
   display: flex;
   flex-direction: column;
-  min-height: calc(var(--key-h) * 4 + 30px);
-  max-height: calc(var(--key-h) * 4 + 30px);
+  height: var(--panel-h);
+  margin-top: 2px;
   border-radius: 18px;
   background: var(--surface);
   color: var(--board-fg);
   overflow: hidden;
   animation: rise var(--dur-med) var(--ease-out);
 }
+.board[data-strip='true'] .panel {
+  --panel-h: calc(var(--key-h) * 4 + 30px);
+  margin-top: 0;
+}
 .panelHead {
+  flex: none;
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 10px 6px 14px;
+  padding: 8px 10px 4px 14px;
   font-weight: 600;
   font-size: 15px;
 }
@@ -314,13 +330,15 @@
   overscroll-behavior: contain;
 }
 .panelFoot {
+  flex: none;
   display: flex;
   gap: 8px;
   align-items: center;
-  padding: 8px 12px 12px;
+  padding: 6px 12px 8px;
   border-top: 1px solid var(--line);
 }
 .chipRow {
+  flex: none;
   display: flex;
   gap: 6px;
   overflow-x: auto;
@@ -332,7 +350,7 @@
 }
 .chip {
   flex: none;
-  height: 30px;
+  height: 34px;
   padding: 0 12px;
   border-radius: 999px;
   border: 1px solid var(--line);
@@ -383,13 +401,6 @@
   color: var(--pill-fg);
   font-size: 13px;
   font-weight: 600;
-}
-.resultLabel {
-  font-size: 12px;
-  color: var(--muted);
-  margin-bottom: 4px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
 }
 .resultText {
   white-space: pre-wrap;
@@ -442,7 +453,7 @@
   place-items: center;
   background: var(--pill-bg);
   color: var(--pill-fg);
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 700;
   flex: none;
 }
@@ -489,10 +500,11 @@
   gap: 6px;
 }
 .action {
-  height: 54px;
+  height: 48px;
   border-radius: 12px;
-  background: var(--pill-bg);
-  color: var(--pill-fg);
+  background: var(--surface-2);
+  color: var(--board-fg);
+  border: 1px solid var(--line);
   font-size: 13px;
   font-weight: 600;
   display: flex;
@@ -501,13 +513,47 @@
   justify-content: center;
   gap: 2px;
 }
+.action[data-primary='true'] {
+  background: var(--pill-bg);
+  color: var(--pill-fg);
+  border-color: transparent;
+}
 .action:disabled {
-  opacity: 0.35;
+  opacity: 0.4;
+}
+.ctxSummary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  align-items: center;
+  font-size: 13px;
+  color: var(--muted);
+  margin: 0 0 8px;
+}
+.ctxSummary b {
+  color: var(--board-fg);
+  font-weight: 600;
+}
+.ctxQuote {
+  margin: 0 0 4px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: var(--surface-2);
+  font-size: 14px;
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.ctxQuote small {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
 }
 .sectionLabel {
-  font-size: 11px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  font-size: 12px;
+  font-weight: 600;
   color: var(--muted);
   margin: 10px 0 6px;
 }
@@ -564,7 +610,8 @@
   gap: 2px;
 }
 .emoji {
-  height: 40px;
+  height: 44px;
+  font-family: var(--font-emoji);
   font-size: 26px;
   border-radius: 10px;
 }
@@ -604,11 +651,62 @@
 }
 
 /* consent */
+.consentLead {
+  margin: 0 0 8px;
+  font-size: 14px;
+  line-height: 1.4;
+}
+.levelPick {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+.levelPick button {
+  padding: 6px 10px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  text-align: left;
+  font-size: 14px;
+  font-weight: 600;
+}
+.levelPick button small {
+  display: block;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted);
+}
+.levelPick button[aria-pressed='true'] {
+  background: var(--pill-bg);
+  color: var(--pill-fg);
+  border-color: transparent;
+}
+.levelPick button[aria-pressed='true'] small {
+  color: inherit;
+  opacity: 0.8;
+}
+.levelPick button:disabled {
+  opacity: 0.4;
+}
 .bullets {
-  margin: 6px 0 0;
-  padding-left: 18px;
+  margin: 8px 0 0;
   font-size: 13px;
-  line-height: 1.5;
+  line-height: 1.4;
+  color: var(--muted);
+}
+.tabHead {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 10px 6px 12px;
+}
+.tabList {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  scrollbar-width: none;
 }
 
 /* toast */
