@@ -94,9 +94,19 @@ def fetchSherpaOnnx = tasks.register('fetchSherpaOnnx') {
         sherpaAar.parentFile.mkdirs()
         def url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/v${sherpaOnnxVersion}/sherpa-onnx-static-link-onnxruntime-${sherpaOnnxVersion}.aar"
         def tmp = new File(sherpaAar.path + '.part')
-        new URL(url).withInputStream { input -> tmp.withOutputStream { it << input } }
+        // Timeouts so a stalled connection fails the build instead of hanging it.
+        def conn = new URL(url).openConnection()
+        conn.connectTimeout = 30_000
+        conn.readTimeout = 60_000
+        try {
+            conn.inputStream.withStream { input -> tmp.withOutputStream { it << input } }
+        } catch (IOException e) {
+            tmp.delete()
+            throw new GradleException("couldn't download sherpa-onnx ${sherpaOnnxVersion}: ${e.message}", e)
+        }
         def got = digest(tmp)
         if (got != sherpaOnnxSha256) { tmp.delete(); throw new GradleException("sherpa-onnx AAR digest mismatch: $got") }
+        sherpaAar.delete() // a stale or corrupt copy; renameTo won't replace it on Windows
         if (!tmp.renameTo(sherpaAar)) throw new GradleException("couldn't move the sherpa-onnx AAR into place")
     }
 }

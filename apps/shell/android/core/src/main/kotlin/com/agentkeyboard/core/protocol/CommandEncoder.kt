@@ -73,7 +73,7 @@ object CommandEncoder {
         is Command.ModelsDelete -> obj("id" to c.id)
         Command.ModelsImport -> obj()
         is Command.ModelsUse -> obj("id" to c.id)
-        is Command.ModelsScan -> obj("pick" to if (c.pickFolder) "folder" else null)
+        is Command.ModelsScan -> obj("pick" to c.pick)
         is Command.ModelsAdopt -> obj("id" to c.id, "trust" to if (c.trust) true else null)
     }
 }

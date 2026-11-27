@@ -786,6 +786,11 @@
       "code": "dropped"
     },
     {
+      "name": "unknown scan pick",
+      "raw": "{\"v\":1,\"id\":\"s:21\",\"type\":\"models.scan\",\"ts\":1,\"payload\":{\"pick\":\"/sdcard\"}}",
+      "code": "dropped"
+    },
+    {
       "name": "trust that is not a boolean",
       "raw": "{\"v\":1,\"id\":\"s:20\",\"type\":\"models.adopt\",\"ts\":1,\"payload\":{\"id\":\"custom-2b-other\",\"trust\":\"yes\"}}",
       "code": "dropped"

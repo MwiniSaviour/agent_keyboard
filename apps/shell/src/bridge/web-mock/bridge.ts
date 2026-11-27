@@ -230,7 +230,7 @@ export class WebMockBridge implements NativeBridge {
       case 'models.use':
         return this.models.use((p as ShellCommands['models.use']).id);
       case 'models.scan':
-        return this.models.scanNow((p as ShellCommands['models.scan']).pick === 'folder');
+        return this.models.scanNow((p as ShellCommands['models.scan']).pick);
       case 'models.adopt': {
         const { id, trust } = p as ShellCommands['models.adopt'];
         return this.models.adopt(id, trust === true);

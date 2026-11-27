@@ -45,7 +45,13 @@ sealed interface Command {
     data object ModelsImport : Command
     data class ModelsUse(val id: String) : Command
     /** [pickFolder]: the companion first lets the user grant a folder (SAF), then :agent scans. */
-    data class ModelsScan(val pickFolder: Boolean) : Command
+    /** [pick]: `folder` / `file` (companion only) first let the user grant a folder or files to look at. */
+    data class ModelsScan(val pick: String?) : Command {
+        companion object {
+            const val PICK_FOLDER = "folder"
+            const val PICK_FILE = "file"
+        }
+    }
     data class ModelsAdopt(val id: String, val trust: Boolean) : Command
 
     /** Traffic the native side must refuse while a sensitive field is focused (FR-KB-14, SPEC §9). */
@@ -164,9 +170,8 @@ object MessageDecoder {
             "models.import" -> Command.ModelsImport
             "models.use" -> Command.ModelsUse(p.reqStr("id", 64).takeIf { MODEL_ID.matches(it) } ?: bad("id"))
             "models.scan" -> Command.ModelsScan(
-                when (val pick = p["pick"]) {
-                    null -> false
-                    else -> pick.str()?.takeIf { it == "folder" }?.let { true } ?: bad("pick")
+                p["pick"]?.let { v ->
+                    v.str()?.takeIf { it == Command.ModelsScan.PICK_FOLDER || it == Command.ModelsScan.PICK_FILE } ?: bad("pick")
                 },
             )
             "models.adopt" -> Command.ModelsAdopt(

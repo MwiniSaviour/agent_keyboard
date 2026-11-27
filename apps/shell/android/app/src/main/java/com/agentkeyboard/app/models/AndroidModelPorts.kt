@@ -118,7 +118,10 @@ class AndroidModelFiles(context: Context) : ModelFiles {
                 out.write(text.toByteArray())
                 out.fd.sync()
             }
-            if (!tmp.renameTo(target)) tmp.delete()
+            if (!tmp.renameTo(target)) {
+                tmp.delete()
+                throw IOException("couldn't replace ${target.name}") // callers retry; never report a stale file as written
+            }
         }
     }
 }

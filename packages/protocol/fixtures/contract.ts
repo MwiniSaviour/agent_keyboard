@@ -311,6 +311,7 @@ export const rejected: Array<{ name: string; raw: string; code: ErrorPayload['co
   { name: 'too many downloads', raw: `{"v":1,"id":"s:16","type":"models.download","ts":1,"payload":{"ids":[${Array.from({ length: 17 }, (_, i) => `"m${i}"`).join(',')}]}}`, code: 'dropped' },
   { name: 'bad model id', raw: '{"v":1,"id":"s:17","type":"models.delete","ts":1,"payload":{"id":"../../databases/ak.db"}}', code: 'dropped' },
   { name: 'path as model to use', raw: '{"v":1,"id":"s:19","type":"models.use","ts":1,"payload":{"id":"/sdcard/x.litertlm"}}', code: 'dropped' },
+  { name: 'unknown scan pick', raw: '{"v":1,"id":"s:21","type":"models.scan","ts":1,"payload":{"pick":"/sdcard"}}', code: 'dropped' },
   { name: 'trust that is not a boolean', raw: '{"v":1,"id":"s:20","type":"models.adopt","ts":1,"payload":{"id":"custom-2b-other","trust":"yes"}}', code: 'dropped' },
   { name: 'unknown models request', raw: '{"v":1,"id":"s:18","type":"models.explode","ts":1,"payload":{}}', code: 'unknown_type' },
   { name: 'capture without flag', raw: '{"v":1,"id":"s:15","type":"screen.capture","ts":1,"payload":{}}', code: 'dropped' },

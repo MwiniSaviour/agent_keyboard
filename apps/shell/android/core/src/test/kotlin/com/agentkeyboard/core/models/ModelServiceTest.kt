@@ -9,6 +9,7 @@ import com.agentkeyboard.core.protocol.ModelPack
 import com.agentkeyboard.core.protocol.ModelsStatus
 import org.junit.Test
 import java.io.ByteArrayInputStream
+import java.io.InputStream
 import java.util.concurrent.Executor
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -339,6 +340,39 @@ class ModelServiceTest {
         again.delete(f.id)
         assertTrue(again.status().packs.none { it.id == f.id })
         assertNull(again.pick(Capability.TEXT))
+    }
+
+    @Test fun aRevokedFolderGrantFailsTheInstallWithoutBlockingLaterOnes() {
+        var revoked = true
+        val inner = FakeScanner().apply { add("My_Finetune.litertlm", customBytes) }
+        val scanner = object : ModelScanner by inner {
+            override fun open(ref: String): InputStream = if (revoked) throw SecurityException("grant revoked") else inner.open(ref)
+        }
+        val s = service(Phones.MID, scanner = scanner)
+        s.onVisible()
+        val id = s.status().found.single().id
+        s.adopt(id, trust = true)
+        assertTrue(s.status().packs.none { it.id == id }) // provisional entry dropped
+        assertTrue(s.status().catalogDetail!!.contains("Pick it (or its folder) again"), s.status().catalogDetail)
+        assertEquals(false, transfers.last())
+        // Nothing is left "running": the next install goes ahead.
+        revoked = false
+        s.scan()
+        s.adopt(s.status().found.single().id, trust = true)
+        assertEquals(ModelPack.INSTALLED, s.status().pack(id).state)
+    }
+
+    @Test fun aCustomCopyIsStoredUnderAFixedNameNotTheProvidersName() {
+        val scanner = FakeScanner().apply { add("evil..name.litertlm", customBytes) }
+        val s = service(Phones.MID, scanner = scanner)
+        s.onVisible()
+        val id = s.status().found.single().id
+        s.adopt(id, trust = true)
+        assertEquals(listOf("$id/${ModelMatcher.CUSTOM_FILE}"), files.final.keys.toList())
+        assertEquals(listOf("content://Download/evil..name.litertlm"), scanner.copied) // the host may drop its grant
+        assertEquals(ModelMatcher.CUSTOM_FILE, s.pick(Capability.TEXT)!!.entry.file)
+        // And after a restart (the record carries no file name).
+        assertEquals(ModelMatcher.CUSTOM_FILE, service(Phones.MID, scanner = scanner).pick(Capability.TEXT)!!.entry.file)
     }
 
     @Test fun aCustomCopyThatFailsLeavesNothingBehind() {

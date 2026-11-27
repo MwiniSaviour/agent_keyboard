@@ -134,7 +134,7 @@ class AgentImeService : InputMethodService(), ImeController.ImeHost, ImeWebView.
         web.onShown()
         classification?.let {
             fallback?.setNumeric(it.context.kind)
-            controller.onFieldStarted(it)
+            controller.onFieldStarted(it, restarting)
         }
     }
 

@@ -181,8 +181,8 @@ const jobOf = (e: MockModelEntry) => (e.kind === 'stt' ? 'transcribe' : 'text');
 
 /** What the simulated scan "finds" in Download: a catalog file (verified by hash) and an unknown model. */
 const MOCK_FOUND: FoundModel[] = [
-  { id: 'found-gemma-3-1b-it-int4', name: 'gemma3-1b-it-int4.litertlm', kind: 'llm', sizeBytes: 584417280, where: 'Download', verified: true, entryId: 'gemma-3-1b-it-int4' },
-  { id: 'custom-1d6xk-qwen3-0.6b-q8', name: 'Qwen3-0.6B-q8.litertlm', kind: 'llm', sizeBytes: 614236160, where: 'Download', verified: false },
+  { id: 'found-gemma-3-1b-it-int4', name: 'gemma3-1b-it-int4.litertlm', kind: 'llm', sizeBytes: 584417280, where: 'Files you picked', verified: true, entryId: 'gemma-3-1b-it-int4' },
+  { id: 'custom-1d6xk-qwen3-0.6b-q8', name: 'Qwen3-0.6B-q8.litertlm', kind: 'llm', sizeBytes: 614236160, where: 'Models', verified: false },
 ];
 
 /** Simulated link speed: fast enough to demo, slow enough to see progress and pause. */
@@ -328,10 +328,13 @@ export class MockModels {
     this.emit();
   }
 
-  /** Simulates a scan of Download (and a picked folder: same result, one more granted folder). */
-  scanNow(pickFolder = false): void {
+  /**
+   * Simulates a scan. `folder`: one more granted folder; `file`: picked files (access unchanged, as
+   * natively). The simulated phone "has" the same two files either way.
+   */
+  scanNow(pick?: 'folder' | 'file'): void {
     if (this.scan.state === 'scanning') return;
-    this.scan = { ...this.scan, state: 'scanning', ...(pickFolder ? { access: 'folders', folders: this.scan.folders + 1 } : {}) };
+    this.scan = { ...this.scan, state: 'scanning', ...(pick === 'folder' ? { access: 'folders', folders: this.scan.folders + 1 } : {}) };
     this.emit();
     setTimeout(() => {
       const have = new Set(this.entries().filter((e) => this.installed(e)).map((e) => e.id));

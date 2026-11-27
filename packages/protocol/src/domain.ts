@@ -377,8 +377,10 @@ export interface FoundModel {
 }
 
 /**
- * Where the scan may look: `app` (this app's own folders and Downloads it can see), `folders` (plus
- * folders the user granted), `all` (all-files access). `allFilesOption`: this build can ask for it.
+ * Where the scan may look: `app` (this app's own `Android/data/<package>/files/models` folder and any
+ * files the user picked), `folders` (plus folders the user granted), `all` (all of shared storage,
+ * all-files access). Android 11+ shows apps no other files in Download/ without all-files access.
+ * `folders` counts granted folders; `allFilesOption`: this build can ask for all-files access.
  */
 export interface ModelScan {
   state: 'idle' | 'scanning';

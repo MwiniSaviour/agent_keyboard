@@ -453,7 +453,7 @@ the message on Android: **IME** = in-process in `ImeController`, **:agent** = fo
 | S→N | `models.download` / `models.cancel` / `models.delete` | `{ids}` (≤ 16) / `{id}` / `{id}`. Companion only; the IME ignores them (ADR-0011) | :agent |
 | S→N | `models.import` | `{}`. Companion only: opens the system file picker; the picked file's descriptor goes to :agent over AIDL and is verified against the signed catalog | plugin → :agent |
 | S→N | `models.use` | `{id}`. Use this installed model for its job (text or voice) instead of the recommended one (ADR-0012) | :agent |
-| S→N | `models.scan` | `{pick?: 'folder'}`. Look for model files already on the phone; `pick: 'folder'` (companion) first opens the folder picker and persists the grant. Results arrive in `models.changed.found` | plugin → :agent |
+| S→N | `models.scan` | `{pick?: 'folder' \| 'file'}`. Look for model files already on the phone; from the companion, `pick: 'folder'` first opens the folder picker and `pick: 'file'` a multi-select file picker (the way into Download/ on Android 11+ without all-files access); grants are persisted, file grants released once copied. Results arrive in `models.changed.found` | plugin → :agent |
 | S→N | `models.adopt` | `{id, trust?}`. Copy a found model into app storage: catalog matches are hash-verified; unknown models need `trust: true` after the user confirms | :agent |
 | S→N | `settings.set` | `{key, value}`; `autonomy.consent` is also mirrored natively in the IME. `keyboard.theme`, `keyboard.haptics` and `keyboard.keySounds` are IME-local (they drive native haptics/sounds and the fallback keyboard's theme) and are not forwarded to `:agent` | IME + :agent |
 | S↔N | `hello` | `{shellVersion}` → `Capabilities` | IME / plugin |

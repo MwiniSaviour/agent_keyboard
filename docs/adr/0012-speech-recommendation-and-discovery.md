@@ -80,16 +80,30 @@ the engine's choice of model.
     trusted as a download;
   - unknown files need `trust: true`, which the Models screen sends only after an explicit
     confirmation. Their measured hash is pinned, so a change to the file is detected.
+  - the copy of an unknown model is always stored as `model.litertlm` in its own folder. The
+    original name comes from another app's storage (a document provider controls it), so it is shown
+    but never used as a path.
+  - an install that fails while opening a file (a revoked grant, a provider that went away) fails
+    that one install; it never leaves the queue blocked.
 - Copying costs storage, but loading in place would let another app swap the bytes after the check,
   and the file could disappear if the user cleans up Downloads.
 - **Where the scan looks (Android):**
   - this app's external `files/models`;
+  - files the user picked (`models.scan {pick: 'file'}`, multi-select, persisted document grants).
+    Files picked together count as one folder, so all the files of a speech model match as a set.
+    Grants are released once the files are copied in, and at once for files that can't be a model;
   - folders the user granted with the folder picker (persisted SAF tree grants);
   - all of shared storage, only on the `full` (sideload) flavor and only after the user grants
     all-files access in system settings (`MANAGE_EXTERNAL_STORAGE`, declared only in
     `src/full/AndroidManifest.xml`). The scan starts with Download/ and Documents/.
 - Play builds never declare all-files access; Play policy reserves it for file managers and similar
   apps.
+- **Download/ on Android 11+:** without all-files access, apps can't list other apps' files in
+  Download/, and the folder picker refuses to grant Download/ itself. That is where most people
+  save a model, so Play builds reach it by picking the files, or a folder inside Download/. The
+  Models screen says exactly this instead of promising a Downloads search.
+- The Models screen refreshes and scans again whenever it becomes visible, for example when the
+  user comes back from system settings or from a download.
 - **Scan limits:** depth 5, 20 000 entries, 500 results, 4 s. Scans run when the Models screen
   opens (at most every 2 minutes) and on demand.
 
@@ -107,9 +121,22 @@ the engine's choice of model.
     speech into segments at 1 s pauses; Silero `Vad` tracks speech activity;
   - events: `voice.partial` while speaking, `voice.final` per segment, `voice.level`, `voice.end`;
   - auto-stop: after 6 s with no speech and after 2 minutes.
-- The recognizer loads on first use and is released after 60 s idle, when the keyboard is destroyed,
-  or when the field changes (the session is cancelled).
-- **Privacy:** audio exists only in the current 100 ms buffer. Nothing is written to disk or logged.
+- The recognizer loads on first use and is released after 60 s idle or when the keyboard is
+  destroyed.
+- **When dictation may run (`core.speech.VoiceGate`, enforced natively; the native side holds the
+  mic and commits the text):**
+  - never in a protected field (FR-KB-14): `voice.start` there ends at once with a reason;
+  - a session belongs to the field it began in. It ends when focus moves to another field (Android
+    sends no finish callback while the keyboard stays up) or the field turns protected. It survives
+    only an app restarting input on the same field, which some apps do after every commit;
+  - it ends when the keyboard hides, and when the shell's voice panel closes or is replaced by
+    another panel or an agent run. The shell sends `voice.cancel` whenever the panel stops being the
+    voice panel during a session (SPEC §13.1: the mic runs only while the voice panel is open);
+  - a session that ends without the user stopping it (no voice model, no mic permission, mic busy)
+    shows its reason in the keyboard.
+- **Privacy:** audio exists only in two reused 100 ms buffers, zeroed after every read and when the
+  session ends (§13.1). Nothing is written to disk or logged. The VAD's speech segments are popped
+  as soon as they form, and the VAD is reset at the end of each session.
 - **Transcript tidy-up:** the English zipformers output upper-case text without punctuation.
   `core.speech.Transcript` lower-cases all-caps output, restores "I", and capitalises the start of a
   sentence based on the text before the cursor. `refine` (LLM punctuation) is still to come.
