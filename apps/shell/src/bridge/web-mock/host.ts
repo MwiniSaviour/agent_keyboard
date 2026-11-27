@@ -3,7 +3,7 @@
  * mutates it exactly as the native InputBridge would mutate a real field.
  */
 import type { ChatMessage, EditorState, FieldContext } from '@ak/protocol';
-import { commitText, deleteSurrounding, EMPTY_EDITOR, moveCursor, replaceText } from '@ak/keyboard-engine';
+import { commitText, deleteSurroundingCodePoints, EMPTY_EDITOR, moveCursor, replaceText } from '@ak/keyboard-engine';
 import { createStore, uid } from '@/lib/store';
 import { SCENARIOS, type ScenarioId } from './scenarios';
 
@@ -101,8 +101,9 @@ export class MockHost {
   commit(text: string): void {
     this.mutate((e) => commitText(e, text));
   }
+  /** Counts are code points, like `deleteSurroundingTextInCodePoints` on Android (SPEC §8.2). */
   delete(before: number, after: number): void {
-    this.mutate((e) => deleteSurrounding(e, before, after));
+    this.mutate((e) => deleteSurroundingCodePoints(e, before, after));
   }
   replace(scope: 'selection' | 'field' | 'word', text: string): void {
     this.mutate((e) => replaceText(e, scope, text));

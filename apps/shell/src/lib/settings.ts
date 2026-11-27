@@ -1,6 +1,9 @@
 /**
- * Keyboard settings (FR-KB-09). Persisted locally in the web build; in the IME the native host owns
- * persistence (`settings.set`) so settings survive WebView recreation.
+ * Keyboard settings (FR-KB-09). Persisted in the origin's localStorage, which the IME and the
+ * companion share (same `https://ak.local` origin, same app profile). The few settings the native IME
+ * acts on itself are mirrored to it with `settings.set {key: "keyboard.<name>"}` (see
+ * `NATIVE_SETTINGS`): haptics and key sounds are performed natively, and the native fallback keyboard
+ * follows the chosen theme.
  */
 import type { ThemeMode } from '@ak/protocol';
 import { createStore, useStore } from './store';
@@ -40,7 +43,26 @@ export const KEY_HEIGHT_PX: Record<KeyboardHeight, number> = { compact: 40, norm
 
 const STORAGE_KEY = 'ak.settings.v1';
 
+/** Settings the native IME host needs (sent as `keyboard.<name>`). Keep in sync with ImeController. */
+export const NATIVE_SETTINGS = ['theme', 'haptics', 'keySounds'] as const satisfies ReadonlyArray<keyof KeyboardSettings>;
+
 export const settingsStore = createStore<KeyboardSettings>({ ...DEFAULT_SETTINGS });
+
+/**
+ * System dark mode as reported by the native IME (`theme.update`). Null until native speaks; the
+ * WebView's `prefers-color-scheme` is the fallback, but inside an IME it does not reliably follow the
+ * system night mode, so native wins when present.
+ */
+export const systemThemeStore = createStore<{ dark: boolean | null }>({ dark: null });
+
+function readStored(raw: string | null): KeyboardSettings | null {
+  if (!raw) return null;
+  try {
+    return { ...DEFAULT_SETTINGS, ...(JSON.parse(raw) as Partial<KeyboardSettings>) };
+  } catch {
+    return null; // corrupted storage → keep current
+  }
+}
 
 let hydrated = false;
 /** Call once on the client after mount (avoids SSR/hydration mismatch in the static export). */
@@ -48,11 +70,17 @@ export function hydrateSettings(): void {
   if (hydrated || typeof window === 'undefined') return;
   hydrated = true;
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (raw) settingsStore.set({ ...DEFAULT_SETTINGS, ...(JSON.parse(raw) as Partial<KeyboardSettings>) });
+    const stored = readStored(window.localStorage.getItem(STORAGE_KEY));
+    if (stored) settingsStore.set(stored);
   } catch {
-    /* corrupted storage → defaults */
+    /* storage unavailable → defaults */
   }
+  // A change made in the companion app reaches the long-lived IME page without a reload.
+  window.addEventListener('storage', (e) => {
+    if (e.key !== STORAGE_KEY) return;
+    const stored = readStored(e.newValue);
+    if (stored) settingsStore.set(stored);
+  });
   settingsStore.subscribe(() => {
     try {
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify(settingsStore.get()));

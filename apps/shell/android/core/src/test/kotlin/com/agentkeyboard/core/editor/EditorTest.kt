@@ -151,5 +151,19 @@ class TextWindowTest {
         assertEquals(0, TextWindow.wordBeforeCursorCodePoints("hello "))
         assertEquals(5, TextWindow.wordBeforeCursorCodePoints("I'm don't"))
         assertEquals(4, TextWindow.wordBeforeCursorCodePoints("Me pɛ Ɛyɛd"), "Twi letters (non-Latin-1)")
+        // Parity with the shell's [\p{L}\p{M}\p{N}'’-]: combining marks are part of the word.
+        assertEquals(6, TextWindow.wordBeforeCursorCodePoints("कहो नमस्ते"), "Devanagari vowel signs/virama are marks")
+        assertEquals(5, TextWindow.wordBeforeCursorCodePoints("un cafe\u0301"), "decomposed accent")
+        assertEquals(10, TextWindow.wordBeforeCursorCodePoints("a well-known"), "hyphenated")
+        assertEquals(0, TextWindow.wordBeforeCursorCodePoints("hi 👍"), "emoji is not a word character")
+    }
+
+    @Test fun lastGraphemeForFallbackBackspace() {
+        assertEquals(0, TextWindow.lastGraphemeCodePoints(""))
+        assertEquals(1, TextWindow.lastGraphemeCodePoints("ab"))
+        assertEquals(1, TextWindow.lastGraphemeCodePoints("a👍"))
+        assertEquals(2, TextWindow.lastGraphemeCodePoints("a👍🏽"), "skin tone modifier")
+        assertEquals(5, TextWindow.lastGraphemeCodePoints("a👨‍👩‍👧"), "ZWJ family")
+        assertEquals(2, TextWindow.lastGraphemeCodePoints("cafe\u0301"), "e + combining acute")
     }
 }

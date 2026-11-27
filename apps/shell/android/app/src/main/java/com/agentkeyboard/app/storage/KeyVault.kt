@@ -7,6 +7,8 @@ import com.agentkeyboard.app.AkLog
 import java.io.File
 import java.security.KeyStore
 import java.security.SecureRandom
+import java.security.UnrecoverableKeyException
+import javax.crypto.AEADBadTagException
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
@@ -22,6 +24,11 @@ import javax.crypto.spec.GCMParameterSpec
  *
  * Not user-auth-bound: the keyboard and background replies must work while the device is locked
  * (direct-boot is out of scope; the DB opens after first unlock).
+ *
+ * Data-loss rule: the store is reset only when the key is provably gone (the wrapping key no longer
+ * exists or cannot authenticate the blob, or the blob is corrupt). A transient Keystore failure
+ * (daemon busy, `ProviderException`, `KeyStoreException`) is thrown to the caller, which retries on
+ * the next request, instead of silently replacing the user's agents, clipboard and audit log.
  */
 class KeyVault(private val context: Context) {
 
@@ -29,8 +36,10 @@ class KeyVault(private val context: Context) {
     fun databaseKey(): Pair<ByteArray, Boolean> {
         val file = File(context.noBackupFilesDir, WRAPPED_FILE)
         if (file.exists()) {
-            unwrap(file.readBytes())?.let { return rawKey(it) to false }
-            AkLog.w("database key could not be unwrapped; starting a fresh encrypted store")
+            when (val r = unwrap(file.readBytes())) {
+                is Unwrapped.Key -> return rawKey(r.bytes).also { r.bytes.fill(0) } to false
+                Unwrapped.Gone -> AkLog.w("database key is permanently unavailable; starting a fresh encrypted store")
+            }
         }
         val key = ByteArray(32).also(SecureRandom()::nextBytes)
         val tmp = File(file.parentFile, "$WRAPPED_FILE.tmp")
@@ -64,13 +73,31 @@ class KeyVault(private val context: Context) {
         return byteArrayOf(VERSION, iv.size.toByte()) + iv + c.doFinal(plain)
     }
 
-    private fun unwrap(blob: ByteArray): ByteArray? = runCatching {
-        require(blob.size > 2 && blob[0] == VERSION)
-        val ivLen = blob[1].toInt()
-        val iv = blob.copyOfRange(2, 2 + ivLen)
-        val c = Cipher.getInstance(TRANSFORM).apply { init(Cipher.DECRYPT_MODE, wrappingKey(), GCMParameterSpec(128, iv)) }
-        c.doFinal(blob, 2 + ivLen, blob.size - 2 - ivLen)
-    }.getOrNull()
+    private sealed interface Unwrapped {
+        class Key(val bytes: ByteArray) : Unwrapped
+        /** The key can never be recovered: resetting the store is the only way forward. */
+        data object Gone : Unwrapped
+    }
+
+    /** Throws on transient failures; see the data-loss rule above. */
+    private fun unwrap(blob: ByteArray): Unwrapped {
+        val ivLen = if (blob.size > 2 && blob[0] == VERSION) blob[1].toInt() else -1
+        if (ivLen !in 12..16 || blob.size <= 2 + ivLen) return Unwrapped.Gone // corrupt / unknown format
+        val ks = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
+        val key = try {
+            ks.getKey(ALIAS, null) as? SecretKey
+        } catch (e: UnrecoverableKeyException) {
+            null
+        } ?: return Unwrapped.Gone // Keystore wiped (e.g. lock-screen reset on some OEMs) or never created
+        return try {
+            val c = Cipher.getInstance(TRANSFORM).apply { init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, blob, 2, ivLen)) }
+            Unwrapped.Key(c.doFinal(blob, 2 + ivLen, blob.size - 2 - ivLen))
+        } catch (e: AEADBadTagException) {
+            Unwrapped.Gone // a different key than the one that wrapped this blob
+        } catch (e: android.security.keystore.KeyPermanentlyInvalidatedException) {
+            Unwrapped.Gone
+        }
+    }
 
     private companion object {
         const val ANDROID_KEYSTORE = "AndroidKeyStore"

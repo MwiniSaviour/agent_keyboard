@@ -33,8 +33,9 @@ class ScreenReaderService : AccessibilityService() {
         val capturedAt: Long,
     )
 
-    private var dirty = true
-    private var cached: Snapshot? = null
+    // Written on main (events) and on the reader thread (snapshots); races only cost a re-walk.
+    @Volatile private var dirty = true
+    @Volatile private var cached: Snapshot? = null
 
     override fun onServiceConnected() {
         instance = this
@@ -115,8 +116,22 @@ class ScreenReaderService : AccessibilityService() {
 
         val isRunning: Boolean get() = instance != null
 
-        /** Main thread. Null when the service is off, the app is blocked, or the window isn't readable. */
-        fun snapshotFor(packageName: String): Snapshot? = instance?.snapshot(packageName)
+        private val reader = java.util.concurrent.Executors.newSingleThreadExecutor { r -> Thread(r, "ak-a11y-read") }
+        private val main = android.os.Handler(android.os.Looper.getMainLooper())
+
+        /**
+         * Reads the app window off the main thread: every node access is a binder call into the host
+         * app, and a large tree walk must never stall the IME's touch handling (NFR-P-01/02). [done]
+         * runs on the main thread with null when the service is off, the app is blocked, or the window
+         * isn't readable.
+         */
+        fun snapshotAsync(packageName: String, done: (Snapshot?) -> Unit) {
+            val svc = instance ?: return done(null)
+            reader.execute {
+                val s = try { svc.snapshot(packageName) } catch (e: RuntimeException) { null } // window vanished mid-walk
+                main.post { done(s) }
+            }
+        }
 
         private const val MAX_NODES = 600
         private const val MAX_DEPTH = 40

@@ -42,10 +42,12 @@ type Empty = Record<string, never>;
 /** Fire-and-forget commands: shell → native. */
 export interface ShellCommands {
   'text.commit': { text: string };
+  /** Unicode code points (not UTF-16 units) before/after the cursor, ≤ 10,000 each (SPEC §8.2). */
   'text.delete': { before: number; after: number };
   /** Replace the current selection, or the whole field when `scope` is "field". Atomic (one undo step). */
   'text.replace': { scope: 'selection' | 'field' | 'word'; text: string };
   'editor.action': { action: Exclude<ImeAction, 'none'> };
+  /** Cursor steps; negative = left. Android applies one D-pad step per unit (≈ one grapheme). */
   'editor.cursor': { delta: number };
   'feedback.key': { kind: FeedbackKind };
   'agent.run': AgentRunRequest;

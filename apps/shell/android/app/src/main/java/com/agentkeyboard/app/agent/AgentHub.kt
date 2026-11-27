@@ -48,7 +48,14 @@ object AgentHub {
     /** Runs [block] on the agent thread with a started runtime. Never blocks the caller. */
     fun post(block: (AgentRuntime) -> Unit) {
         handler.post {
-            val rt = runtime ?: create().also { runtime = it }
+            val rt = runtime ?: try {
+                create().also { runtime = it }
+            } catch (e: Exception) {
+                // e.g. a transient Keystore failure opening the DB. Drop this task (its caller times out
+                // with `unavailable`) and retry on the next one, rather than crash-looping :agent.
+                AkLog.w("agent runtime unavailable: ${e::class.java.simpleName}")
+                return@post
+            }
             try {
                 block(rt)
             } catch (e: RuntimeException) {

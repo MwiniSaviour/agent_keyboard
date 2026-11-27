@@ -7,7 +7,8 @@ import com.agentkeyboard.core.protocol.ImeActionKind
 /**
  * Text operations queued between two frames and applied inside one
  * `beginBatchEdit()/endBatchEdit()` (SPEC §8.3, §9). Counts are Unicode code points, matching
- * `InputConnection.deleteSurroundingTextInCodePoints` (API 24 = our minSdk).
+ * `InputConnection.deleteSurroundingTextInCodePoints` (API 24; our minSdk is 29) and the wire unit of
+ * `text.delete` (SPEC §8.2).
  */
 sealed interface EditOp {
     data class Commit(val text: String) : EditOp
@@ -107,19 +108,45 @@ object TextWindow {
     }
 
     /**
-     * Code points of the word immediately before the cursor, including trailing letters/digits/
-     * apostrophes but not whitespace — what `text.replace{scope:"word"}` replaces (e.g. applying a
-     * correction from the suggestion strip).
+     * Code points of the word immediately before the cursor — what `text.replace{scope:"word"}`
+     * replaces (e.g. applying a correction from the suggestion strip). Word characters are exactly the
+     * shell's `currentWord` set (`[\p{L}\p{M}\p{N}'’-]`, keyboard-engine `text.ts`): letters, combining
+     * marks (Devanagari vowel signs, decomposed accents), digits, apostrophes and hyphens. Any mismatch
+     * would replace a different span than the shell computed its suggestion for.
      */
     fun wordBeforeCursorCodePoints(before: String): Int {
         var i = before.length
         var count = 0
         while (i > 0) {
             val cp = before.codePointBefore(i)
-            if (!(Character.isLetterOrDigit(cp) || cp == '\''.code || cp == '’'.code || cp == '-'.code)) break
+            if (!isWordCodePoint(cp)) break
             i -= Character.charCount(cp)
             count++
         }
         return count
+    }
+
+    /**
+     * Code points of the last user-perceived character (grapheme cluster) of [before]: what one
+     * backspace removes (FR-KB-05), e.g. 1 for "a", 2 for 👍🏽, 5 for a ZWJ family. Used by the native
+     * fallback keyboard; the shell computes the same with `Intl.Segmenter`.
+     */
+    fun lastGraphemeCodePoints(before: CharSequence): Int {
+        if (before.isEmpty()) return 0
+        val s = before.toString()
+        val it = java.text.BreakIterator.getCharacterInstance()
+        it.setText(s)
+        val end = it.last()
+        val start = it.previous().takeIf { b -> b != java.text.BreakIterator.DONE } ?: 0
+        return s.codePointCount(start, end).coerceAtLeast(1)
+    }
+
+    private fun isWordCodePoint(cp: Int): Boolean = when (Character.getType(cp).toByte()) {
+        Character.UPPERCASE_LETTER, Character.LOWERCASE_LETTER, Character.TITLECASE_LETTER,
+        Character.MODIFIER_LETTER, Character.OTHER_LETTER,
+        Character.NON_SPACING_MARK, Character.COMBINING_SPACING_MARK, Character.ENCLOSING_MARK,
+        Character.DECIMAL_DIGIT_NUMBER, Character.LETTER_NUMBER, Character.OTHER_NUMBER,
+        -> true
+        else -> cp == '\''.code || cp == '’'.code || cp == '-'.code
     }
 }

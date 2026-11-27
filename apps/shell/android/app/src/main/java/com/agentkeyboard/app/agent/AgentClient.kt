@@ -14,7 +14,9 @@ import com.agentkeyboard.core.protocol.PROTOCOL_VERSION
 /**
  * Client side of the IME/companion → `:agent` link (ADR-0003, SPEC §9 "lazy AIDL bind with backoff").
  *
- *  - Binds on first use, not at IME start, so typing never pays for the second process.
+ *  - Binds on first use, not at IME start, so typing never pays for the second process. Focus
+ *    changes alone never bind: the latest focus is remembered and delivered first on connect, so
+ *    `:agent`'s secure-field gate always sees the current field before any request.
  *  - Envelopes posted while (re)connecting are queued (bounded) and flushed in order on connect.
  *  - On disconnect/binder death it rebinds with exponential backoff (250 ms → 8 s), and reports
  *    [Listener.onAgentUnavailable] so callers can fail pending requests instead of hanging until the
@@ -34,6 +36,17 @@ class AgentClient(private val context: Context, private val listener: Listener) 
     private var backoffMs = INITIAL_BACKOFF_MS
     private var closed = false
     private val queue = ArrayDeque<() -> Unit>()
+    private var lastFocus: String? = null
+
+    /**
+     * Keep the link up even with nothing queued (e.g. while autonomy is armed and must hear inbound
+     * messages): binds now, and rebinds after a disconnect instead of waiting for the next request.
+     */
+    var sticky: Boolean = false
+        set(value) {
+            field = value
+            if (value) ensureBound()
+        }
 
     private val callback = object : IAgentCallback.Stub() {
         override fun onEnvelope(envelopeJson: String) {
@@ -53,6 +66,7 @@ class AgentClient(private val context: Context, private val listener: Listener) 
                     AkLog.w("agent protocol mismatch"); unbindQuietly(); return
                 }
                 s.register(callback)
+                lastFocus?.let(s::focusChanged)
             } catch (e: RemoteException) {
                 onLost(); return
             }
@@ -79,7 +93,15 @@ class AgentClient(private val context: Context, private val listener: Listener) 
 
     fun recordClipboard(text: String, sensitiveSource: Boolean) = call { it.recordClipboard(text, sensitiveSource) }
 
-    fun focusChanged(fieldJson: String) = call { it.focusChanged(fieldJson) }
+    fun focusChanged(fieldJson: String) {
+        lastFocus = fieldJson
+        val s = service ?: return // delivered on connect
+        try {
+            s.focusChanged(fieldJson)
+        } catch (e: RemoteException) {
+            onLost()
+        }
+    }
 
     fun appendAudit(auditJson: String) = call { it.appendAudit(auditJson) }
 
@@ -125,7 +147,7 @@ class AgentClient(private val context: Context, private val listener: Listener) 
         if (closed) return
         val delay = backoffMs
         backoffMs = (backoffMs * 2).coerceAtMost(MAX_BACKOFF_MS)
-        main.postDelayed({ if (queue.isNotEmpty()) ensureBound() }, delay)
+        main.postDelayed({ if (queue.isNotEmpty() || sticky) ensureBound() }, delay)
     }
 
     private fun unbindQuietly() {

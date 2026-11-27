@@ -11,7 +11,6 @@ import android.os.Build
 import android.os.SystemClock
 import android.view.Choreographer
 import android.view.HapticFeedbackConstants
-import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
@@ -61,11 +60,18 @@ class AgentImeService : InputMethodService(), ImeController.ImeHost, ImeWebView.
 
     override fun onCreate() {
         super.onCreate()
+        heightDp = getSharedPreferences(PREFS, MODE_PRIVATE).getInt(KEY_HEIGHT, DEFAULT_HEIGHT_DP)
         executor = InputExecutor(
             connection = { currentInputConnection },
             field = { classification },
             hasSelection = { selStart != selEnd },
-            onApplied = { scheduleEditorState() },
+            onApplied = {
+                // Every applied op collapses the selection. Record that now: onUpdateSelection arrives
+                // asynchronously, and a stale "has selection" would make the next backspace remove an
+                // already-gone selection instead of a character.
+                selStart = selEnd
+                scheduleEditorState()
+            },
         )
         controller = ImeController(this, this)
         web = ImeWebView(this, this)
@@ -78,6 +84,8 @@ class AgentImeService : InputMethodService(), ImeController.ImeHost, ImeWebView.
         (root.parent as? ViewGroup)?.removeView(root)
         root.removeAllViews()
         val fb = FallbackKeyboardView(this, this).also { fallback = it }
+        fb.setTheme(controller.keyboardTheme)
+        classification?.let { fb.setNumeric(it.context.kind) }
         // Both surfaces share one height so swapping between them never moves the app's layout.
         root.addView(fb, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, px(heightDp)))
         web.view?.let { wv ->
@@ -99,8 +107,12 @@ class AgentImeService : InputMethodService(), ImeController.ImeHost, ImeWebView.
 
     override fun onStartInputView(info: EditorInfo, restarting: Boolean) {
         super.onStartInputView(info, restarting)
+        recoverRendererIfDue()
         web.onShown()
-        classification?.let(controller::onFieldStarted)
+        classification?.let {
+            fallback?.setNumeric(it.context.kind)
+            controller.onFieldStarted(it)
+        }
     }
 
     override fun onFinishInputView(finishingInput: Boolean) {
@@ -168,17 +180,10 @@ class AgentImeService : InputMethodService(), ImeController.ImeHost, ImeWebView.
         )
     }
 
-    override fun sendRawEnter() {
-        val ic = currentInputConnection ?: return
-        val t = SystemClock.uptimeMillis()
-        ic.sendKeyEvent(KeyEvent(t, t, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER, 0))
-        ic.sendKeyEvent(KeyEvent(t, t, KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER, 0))
-    }
-
-    override fun hapticFeedback(kind: String) {
-        // The shell only sends feedback.key when haptics or key sounds are enabled in its settings.
-        val v = container ?: return
-        v.performHapticFeedback(if (kind == "tap") HapticFeedbackConstants.KEYBOARD_TAP else HapticFeedbackConstants.VIRTUAL_KEY)
+    override fun keyFeedback(kind: String, haptic: Boolean, sound: Boolean) {
+        if (haptic) container?.performHapticFeedback(if (kind == "tap") HapticFeedbackConstants.KEYBOARD_TAP else HapticFeedbackConstants.VIRTUAL_KEY)
+        if (!sound) return
+        // Note: the platform plays these only when system "Touch sounds" is on.
         val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
         am.playSoundEffect(
             when (kind) {
@@ -191,6 +196,13 @@ class AgentImeService : InputMethodService(), ImeController.ImeHost, ImeWebView.
         )
     }
 
+    override fun onKeyboardThemeChanged(theme: String) {
+        fallback?.setTheme(theme)
+    }
+
+    override fun isSystemDark(): Boolean =
+        (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
+
     override fun switchToNextKeyboard() {
         switchToNextInputMethod(false)
     }
@@ -198,6 +210,8 @@ class AgentImeService : InputMethodService(), ImeController.ImeHost, ImeWebView.
     override fun setKeyboardHeightDp(dp: Int) {
         if (dp == heightDp) return
         heightDp = dp
+        // Remembered so the next cold start opens at the shell's height: no layout jump at first show.
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putInt(KEY_HEIGHT, dp).apply()
         web.view?.let { wv -> wv.layoutParams = wv.layoutParams?.apply { height = px(dp) } }
         fallback?.let { fb -> fb.layoutParams = fb.layoutParams?.apply { height = px(dp) } }
     }
@@ -227,22 +241,40 @@ class AgentImeService : InputMethodService(), ImeController.ImeHost, ImeWebView.
         applyVisibility()
         // Recreate, but never in a crash loop: at most 3 restarts per minute, then stay on the fallback.
         val now = SystemClock.elapsedRealtime()
-        if (now - lastRendererRestartAt > 60_000) rendererRestarts = 0
+        if (now - lastRendererRestartAt > RENDERER_COOLDOWN_MS) rendererRestarts = 0
         lastRendererRestartAt = now
-        if (++rendererRestarts <= 3) {
-            web.create()
-            if (container != null) onCreateInputView().also { setInputView(it) }
+        if (++rendererRestarts <= MAX_RENDERER_RESTARTS) {
+            recreateWebView()
         } else {
-            AkLog.w("renderer restart limit reached; fallback keyboard until next IME start")
+            AkLog.w("renderer restart limit reached; fallback keyboard until the next show after a cool-down")
         }
+    }
+
+    private fun recreateWebView() {
+        web.create()
+        if (container != null) onCreateInputView().also { setInputView(it) }
+    }
+
+    /** After the crash-loop limit, retry once the keyboard is shown again and a minute has passed. */
+    private fun recoverRendererIfDue() {
+        if (web.view != null || !web.supported || rendererRestarts <= MAX_RENDERER_RESTARTS) return
+        if (SystemClock.elapsedRealtime() - lastRendererRestartAt < RENDERER_COOLDOWN_MS) return
+        rendererRestarts = 0
+        recreateWebView()
     }
 
     // ───────────── FallbackKeyboardView.Listener ─────────────
 
     override fun onFallbackText(text: String) = executor.submit(EditOp.Commit(text))
-    override fun onFallbackBackspace() = executor.submit(EditOp.Delete(1, 0))
+    override fun onFallbackBackspace() {
+        // One grapheme, like the shell (FR-KB-05): never half an emoji. Secure fields are not read back.
+        val n = if (selStart != selEnd || classification?.context?.sensitive == true) 1
+        else TextWindow.lastGraphemeCodePoints(currentInputConnection?.getTextBeforeCursor(GRAPHEME_WINDOW, 0) ?: "").coerceAtLeast(1)
+        executor.submit(EditOp.Delete(n, 0))
+    }
     override fun onFallbackEnter() = executor.submit(EditOp.Action(classification?.context?.imeAction ?: ImeActionKind.NEWLINE))
     override fun onFallbackSwitchKeyboard() = switchToNextKeyboard()
+    override fun onFallbackFeedback(kind: String) = controller.keyFeedback(kind)
 
     // ───────────── internals ─────────────
 
@@ -297,5 +329,10 @@ class AgentImeService : InputMethodService(), ImeController.ImeHost, ImeWebView.
     private companion object {
         const val DEFAULT_HEIGHT_DP = 290
         const val MAX_CLIP_CHARS = 10_000
+        const val MAX_RENDERER_RESTARTS = 3
+        const val GRAPHEME_WINDOW = 32
+        const val RENDERER_COOLDOWN_MS = 60_000L
+        const val PREFS = "ak_ime" // shared with ImeController: one file, one disk read at cold start
+        const val KEY_HEIGHT = "host.height.dp"
     }
 }

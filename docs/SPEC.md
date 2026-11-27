@@ -439,7 +439,7 @@ the message on Android: **IME** = in-process in `ImeController`, **:agent** = fo
 | S→N | `feedback.key` | `{kind: "tap"\|"delete"\|"space"\|"return"\|"mod"}` | IME |
 | S→N | `ui.resize` | `{height}` integer dp, 120–600; the IME sizes its window to it | IME |
 | S→N | `autonomy.set` / `autonomy.takeover` | `{enabled, level, agentId}` / `{}` | IME (state machine) |
-| S→N | `form.fill` | `{values: {autofillHint: text}}`; fills, never submits | IME |
+| S→N | `form.fill` | `{values: {key: text}}`, key = autofill hint, field label/id or profile concept (`email`, `givenName`, …). Native matches each value to a field deterministically (`core/editor/FormFill`) and writes it as focus reaches that field (60 s, same app). It never guesses, never fills sensitive fields and never submits | IME |
 | S→N | `clipboard.paste` | `{id}` | IME |
 | S→N | `voice.start` / `voice.stop` / `voice.cancel` | `{refine}` / `{}` / `{}` | IME (STT in Part 3) |
 | S→N | `app.open` / `system.open` | `{route}` / `{target: "ime_settings"\|"ime_picker"\|"notification_access"\|"accessibility"}` | IME / plugin |
@@ -447,7 +447,7 @@ the message on Android: **IME** = in-process in `ImeController`, **:agent** = fo
 | S→N | `tts.speak` / `tts.stop` | `{text}` (≤ 4,000 spoken) / `{}` | :agent |
 | S→N | `clipboard.pin` / `clipboard.delete` | `{id, pinned}` / `{id}` | :agent |
 | S→N | `agents.save` / `agents.delete` | `{agent: AgentDefinition}` / `{id}`; General cannot be deleted | :agent |
-| S→N | `settings.set` | `{key, value}`; `autonomy.consent` is also mirrored natively in the IME | IME + :agent |
+| S→N | `settings.set` | `{key, value}`; `autonomy.consent` is also mirrored natively in the IME. `keyboard.theme`, `keyboard.haptics` and `keyboard.keySounds` are IME-local (they drive native haptics/sounds and the fallback keyboard's theme) and are not forwarded to `:agent` | IME + :agent |
 | S↔N | `hello` | `{shellVersion}` → `Capabilities` | IME / plugin |
 | S↔N | `context.snapshot` | `{scope: "field"\|"screen"\|"visual"}` → `ScreenContext` (rung 0/2 in IME, rung 1 from :agent) | IME + :agent |
 | S↔N | `clipboard.list` / `agents.list` / `system.status` | `{}` → `ClipboardItem[]` / `AgentDefinition[]` / `SystemStatus` | :agent |
@@ -492,17 +492,17 @@ Replies are `<type>.result` with `re`, or `error {code, message}`, where `code` 
 #### 9.1 Part 2 implementation map (ADR-0009)
 | Concern | Class (`apps/shell/android/`) | Notes |
 |---|---|---|
-| Pure logic: codec, router, editor ops, field classifier, autonomy reducer, privacy, conversation cache, `:agent` runtime | `core/` (`com.agentkeyboard.core.*`) | No Android imports; 101 JVM tests run with or without Gradle. |
-| IME service, insets, editor-state throttle, secure-field gate | `app/…/ime/AgentImeService.kt` | Never fullscreen. Restarts the renderer at most 3 times a minute, then stays on the fallback. |
+| Pure logic: codec, router, editor ops, field classifier, form-fill matcher, autonomy reducer, privacy, conversation cache, `:agent` runtime | `core/` (`com.agentkeyboard.core.*`) | No Android imports; 107 JVM tests run with or without Gradle. |
+| IME service, insets, editor-state throttle, secure-field gate | `app/…/ime/AgentImeService.kt` | Never fullscreen. Restarts the renderer at most 3 times a minute, then stays on the fallback until the next show after a 60 s cool-down. Remembers the shell's last height so cold starts open at the right size. |
 | Shell transport | `ime/ImeWebView.kt` | `addWebMessageListener` on `https://ak.local` only. Assets come from the static export with a header CSP and a hash-pinned meta CSP. |
 | Ownership split | `ime/ImeController.kt` | Editor, haptics, resize, autonomy and rung-0/2 context are handled in-process. Data and AI requests go to `:agent` with a 4 s timeout and fail fast when it is lost. |
 | Text ops | `ime/InputExecutor.kt` | The first op of a frame is applied immediately; the rest of that frame is coalesced into one batch edit. |
-| Fallback keyboard | `ime/FallbackKeyboardView.kt` | Native monochrome QWERTY at the same height as the shell. |
-| AIDL client | `agent/AgentClient.kt` | Lazy bind, version check, a bounded queue of 64, and backoff from 250 ms to 8 s. |
+| Fallback keyboard | `ime/FallbackKeyboardView.kt` | Native monochrome QWERTY plus a numbers/symbols layer (opened for number, phone and OTP fields), at the same height and in the same theme as the shell. Grapheme backspace, rollover typing, feedback per the user's settings. |
+| AIDL client | `agent/AgentClient.kt` | Lazy bind (focus changes are cached, not a reason to bind), version check, a bounded queue of 64, and backoff from 250 ms to 8 s. Stays bound while autonomy is armed. |
 | `:agent` front, hub, FGS | `agent/AgentService.kt`, `agent/AgentHub.kt` | UID-checked binder. specialUse foreground only while a run is in flight. `START_NOT_STICKY`. |
-| Persistence | `storage/AkDatabase.kt`, `storage/KeyVault.kt` | SQLCipher with a raw 256-bit key wrapped by AndroidKeyStore AES-GCM in `noBackupFilesDir`, using the shared forward-only migrations. |
+| Persistence | `storage/AkDatabase.kt`, `storage/KeyVault.kt` | SQLCipher with a raw 256-bit key wrapped by AndroidKeyStore AES-GCM in `noBackupFilesDir`, using the shared forward-only migrations. The store is reset only when the key is provably gone; transient Keystore errors are retried, never treated as data loss. |
 | Rung 1 + RemoteInput | `notify/AkNotificationListener.kt` | MessagingStyle parsing, plus reply actions kept in memory for consented background replies (Part 3). |
-| Rung 2 | `a11y/ScreenReaderService.kt` | Lazy and bounded (600 nodes, depth 40). Skips password nodes and blocked apps. Read-only in `play`. |
+| Rung 2 | `a11y/ScreenReaderService.kt` | Lazy, bounded (600 nodes, depth 40) and read on a background thread, never the IME's main thread. Skips password nodes and blocked apps. Read-only in `play`. |
 | TTS | `agent/PlatformSpeech.kt` | Platform engine (offline once a voice is installed), released 90 s after speech ends. |
 | Companion | `companion/AgentKitPlugin.kt`, `MainActivity.kt` | Passes envelopes through to `:agent` and filters replies to its own requests. |
 

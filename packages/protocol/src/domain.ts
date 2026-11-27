@@ -179,7 +179,11 @@ export type ResultActionId = 'apply' | 'insert' | 'copy' | 'speak' | 'retry';
 export interface AgentRunResult {
   runId: string;
   text: string;
-  /** Structured output for structured skills (e.g. fill_form → field id → value). */
+  /**
+   * Structured output for structured skills (e.g. fill_form → field key → value). Autonomy drafts carry
+   * `confidence` here as a decimal string ("0.82"); when it is missing the native autonomy machine
+   * treats the draft as low confidence and escalates (FR-AU-04, fail-safe).
+   */
   data?: Record<string, string>;
   actions: ResultActionId[];
   /** How `apply` should be executed. */

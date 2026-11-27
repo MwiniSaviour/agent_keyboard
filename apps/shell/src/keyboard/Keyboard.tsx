@@ -5,7 +5,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { NativeBridge } from '@ak/protocol';
-import { KEY_HEIGHT_PX, useSetting } from '@/lib/settings';
+import { KEY_HEIGHT_PX, systemThemeStore, useSetting } from '@/lib/settings';
 import { useStore } from '@/lib/store';
 import { AgentBar } from './AgentBar';
 import { ShellContext, useShell as useShellCtx, type ShellContextValue } from './context';
@@ -20,6 +20,7 @@ import css from './keyboard.module.css';
 
 export function useResolvedTheme(): 'light' | 'dark' {
   const pref = useSetting('theme');
+  const nativeDark = useStore(systemThemeStore, (s) => s.dark);
   const [system, setSystem] = useState<'light' | 'dark'>('light');
   useEffect(() => {
     const mq = window.matchMedia('(prefers-color-scheme: dark)');
@@ -28,7 +29,8 @@ export function useResolvedTheme(): 'light' | 'dark' {
     mq.addEventListener('change', on);
     return () => mq.removeEventListener('change', on);
   }, []);
-  return pref === 'system' ? system : pref;
+  if (pref !== 'system') return pref;
+  return nativeDark === null ? system : nativeDark ? 'dark' : 'light';
 }
 
 export interface KeyboardProps {

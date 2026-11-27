@@ -18,6 +18,7 @@ import com.agentkeyboard.core.autonomy.SendStrategy
 import com.agentkeyboard.core.context.AppCategories
 import com.agentkeyboard.core.editor.EditOp
 import com.agentkeyboard.core.editor.FieldClassification
+import com.agentkeyboard.core.editor.FormFill
 import com.agentkeyboard.core.json.Json
 import com.agentkeyboard.core.json.JsonObj
 import com.agentkeyboard.core.json.JsonValue
@@ -39,6 +40,7 @@ import com.agentkeyboard.core.protocol.EditorState
 import com.agentkeyboard.core.protocol.Envelope
 import com.agentkeyboard.core.protocol.EnvelopeCodec
 import com.agentkeyboard.core.protocol.ErrorCode
+import com.agentkeyboard.core.protocol.FieldContext
 import com.agentkeyboard.core.protocol.IdGenerator
 import com.agentkeyboard.core.protocol.ImeActionKind
 import com.agentkeyboard.core.protocol.PROTOCOL_VERSION
@@ -65,8 +67,11 @@ class ImeController(private val context: Context, private val ime: ImeHost) : Br
         fun classification(): FieldClassification?
         fun editorState(): EditorState
         fun executor(): InputExecutor
-        fun sendRawEnter()
-        fun hapticFeedback(kind: String)
+        /** Key feedback per the user's separate haptics / key-sound settings (FR-KB-09). */
+        fun keyFeedback(kind: String, haptic: Boolean, sound: Boolean)
+        /** The keyboard theme setting changed: `light`, `dark` or `system` (native fallback follows it). */
+        fun onKeyboardThemeChanged(theme: String)
+        fun isSystemDark(): Boolean
         fun switchToNextKeyboard()
         fun setKeyboardHeightDp(dp: Int)
         fun onShellReady()
@@ -98,6 +103,15 @@ class ImeController(private val context: Context, private val ime: ImeHost) : Br
 
     private val autonomy = AutonomyMachine(newRunId = { "auto_${internalIds.next().substringAfter(':')}" })
 
+    /** Approved `form.fill` values not yet written, filled as focus reaches their fields (SPEC §11.7). */
+    private class PendingFill(val packageName: String, val values: LinkedHashMap<String, String>, val expiresAt: Long)
+    private var pendingFill: PendingFill? = null
+
+    // Mirrors of the shell's keyboard settings (`settings.set keyboard.*`), read on every keystroke.
+    private var haptics = setting(KEY_HAPTICS).bool() ?: true
+    private var keySounds = setting(KEY_SOUNDS).bool() ?: false
+    val keyboardTheme: String get() = setting(KEY_THEME).str() ?: "light"
+
     init {
         if (prefs.getBoolean(KEY_CONSENT, false)) apply(autonomy.dispatch(AutonomyEvent.Consent(true)))
     }
@@ -120,7 +134,7 @@ class ImeController(private val context: Context, private val ime: ImeHost) : Br
             ime.executor().submit(op); return
         }
         when (command) {
-            is Command.Feedback -> ime.hapticFeedback(command.kind)
+            is Command.Feedback -> keyFeedback(command.kind)
             is Command.Resize -> ime.setKeyboardHeightDp(command.heightDp)
             is Command.AutonomySet -> onAutonomySet(command)
             Command.AutonomyTakeover -> apply(autonomy.dispatch(AutonomyEvent.UserTouched))
@@ -132,7 +146,9 @@ class ImeController(private val context: Context, private val ime: ImeHost) : Br
             is Command.FormFill -> fillForm(command.values)
             is Command.SettingsSet -> {
                 onSetting(command.key, command.value)
-                forward(command)
+                // Keyboard settings are IME-local (their source of truth is the shell's storage); sending
+                // them to :agent would bind the second process on every keyboard start for nothing.
+                if (!command.key.startsWith("keyboard.")) forward(command)
             }
             is Command.AgentCancel -> { tokens.discard(command.runId); forward(command) }
             // Data/AI traffic owned by :agent.
@@ -150,6 +166,8 @@ class ImeController(private val context: Context, private val ime: ImeHost) : Br
                 // Replay the current binding so a (re)loaded shell never misses the field it opened on.
                 ime.classification()?.let { emitEditorStart(it) }
                 router.emit("autonomy.phase", obj("phase" to autonomy.state.phase.wire, "detail" to autonomy.state.detail))
+                // Inside an IME the WebView's prefers-color-scheme does not reliably follow night mode.
+                router.emit("theme.update", obj("mode" to "system", "systemDark" to ime.isSystemDark()))
             }
             is Request.ContextSnapshot -> snapshot(request.scope, reply)
             Request.AgentsList -> forwardRequest("agents.list", obj(), reply) { res ->
@@ -220,10 +238,18 @@ class ImeController(private val context: Context, private val ime: ImeHost) : Br
     // ───────────── IME lifecycle hooks (called by the service) ─────────────
 
     fun onFieldStarted(c: FieldClassification) {
-        ime.executor().discard()
+        // A restart of the same field (restarting=true) has no finish callback first: anything still
+        // queued for this frame was typed into this field and must land, not be dropped.
+        ime.executor().flush()
         if (router.shellReady) emitEditorStart(c)
         agent.focusChanged(Json.write(c.context.toJson()))
         apply(autonomy.dispatch(AutonomyEvent.EnvironmentChanged(environment())))
+        fillFocused(c.context)
+    }
+
+    /** Shell `feedback.key` and the native fallback keyboard share the user's settings. */
+    fun keyFeedback(kind: String) {
+        if (haptics || keySounds) ime.keyFeedback(kind, haptics, keySounds)
     }
 
     fun onFieldFinished() {
@@ -303,23 +329,30 @@ class ImeController(private val context: Context, private val ime: ImeHost) : Br
         val pkg = c.context.packageName
         val blocked = PrivacyFilter.isBlockedApp(pkg)
         if (scope == "screen" && !blocked) {
-            ScreenReaderService.snapshotFor(pkg)?.let { s ->
-                return reply.ok(
-                    ScreenContext(
-                        appPackage = pkg, appLabel = c.context.appLabel, category = AppCategories.of(pkg),
-                        screenType = if (s.messages.isNotEmpty()) "chat" else AppCategories.screenTypeFor(AppCategories.of(pkg)),
-                        field = c.context,
-                        chat = s.messages.takeIf { it.isNotEmpty() }?.let { Triple(s.title, s.participants, it) },
-                        text = s.text.takeIf { s.messages.isEmpty() && it.isNotBlank() },
-                        sensitivity = SensitivityFlags(s.secureWindow, c.context.sensitive, false),
-                        rung = 2, capturedAt = s.capturedAt, ttlMs = SNAPSHOT_TTL_MS,
-                    ).toJson(),
-                )
+            ScreenReaderService.snapshotAsync(pkg) { s ->
+                // Focus may have moved while reading: never answer for a field that is now secure.
+                val now = ime.classification() ?: return@snapshotAsync reply.fail(ErrorCode.UNAVAILABLE, "No focused field")
+                if (now.context.sensitive) return@snapshotAsync reply.fail(ErrorCode.SECURE_FIELD, "Not available in secure fields")
+                if (s != null) {
+                    reply.ok(
+                        ScreenContext(
+                            appPackage = pkg, appLabel = c.context.appLabel, category = AppCategories.of(pkg),
+                            screenType = if (s.messages.isNotEmpty()) "chat" else AppCategories.screenTypeFor(AppCategories.of(pkg)),
+                            field = c.context,
+                            chat = s.messages.takeIf { it.isNotEmpty() }?.let { Triple(s.title, s.participants, it) },
+                            text = s.text.takeIf { s.messages.isEmpty() && it.isNotBlank() },
+                            sensitivity = SensitivityFlags(s.secureWindow, c.context.sensitive, false),
+                            rung = 2, capturedAt = s.capturedAt, ttlMs = SNAPSHOT_TTL_MS,
+                        ).toJson(),
+                    )
+                    return@snapshotAsync
+                }
+                // Rung 1 from :agent's notification cache; anything else degrades to the local rung 0.
+                forwardRequest("context.snapshot", obj("scope" to scope), reply, onError = { code, message ->
+                    if (code == ErrorCode.SECURE_FIELD) reply.fail(code, message) else reply.ok(localSnapshot(now, PrivacyFilter.isBlockedApp(now.context.packageName)))
+                }) {}
             }
-            // Rung 1 from :agent's notification cache; anything else degrades to the local rung 0.
-            return forwardRequest("context.snapshot", obj("scope" to scope), reply, onError = { code, message ->
-                if (code == ErrorCode.SECURE_FIELD) reply.fail(code, message) else reply.ok(localSnapshot(c, blocked))
-            }) {}
+            return
         }
         reply.ok(localSnapshot(c, blocked))
     }
@@ -342,7 +375,13 @@ class ImeController(private val context: Context, private val ime: ImeHost) : Br
             prefs.edit().putBoolean(KEY_CONSENT, granted).putLong(KEY_CONSENT_AT, System.currentTimeMillis()).apply()
             apply(autonomy.dispatch(AutonomyEvent.Consent(granted)))
         } else if (key.startsWith("autonomy.") || key.startsWith("keyboard.")) {
+            val previous = setting(key)
             prefs.edit().putString("s:$key", Json.write(value)).apply()
+            when (key) {
+                KEY_HAPTICS -> haptics = value.bool() ?: true
+                KEY_SOUNDS -> keySounds = value.bool() ?: false
+                KEY_THEME -> if (previous != value) ime.onKeyboardThemeChanged(keyboardTheme)
+            }
             if (key.startsWith("autonomy.")) apply(autonomy.dispatch(AutonomyEvent.EnvironmentChanged(environment())))
         }
     }
@@ -376,7 +415,11 @@ class ImeController(private val context: Context, private val ime: ImeHost) : Br
     /** Interprets autonomy effects. Every branch is a thin Android/IPC call; decisions live in core. */
     private fun apply(effects: List<Effect>) {
         for (e in effects) when (e) {
-            is Effect.Phase -> if (router.shellReady) router.emit("autonomy.phase", obj("phase" to e.phase.wire, "detail" to e.detail))
+            is Effect.Phase -> {
+                // Armed autonomy reacts to inbound messages from :agent, so the link must stay up.
+                agent.sticky = e.phase != com.agentkeyboard.core.protocol.AutonomyPhase.OFF
+                if (router.shellReady) router.emit("autonomy.phase", obj("phase" to e.phase.wire, "detail" to e.detail))
+            }
             is Effect.RequestDraft -> {
                 awaitingDraftRun = e.runId
                 forward(Command.AgentRun(com.agentkeyboard.core.protocol.AgentRunRequest(e.runId, e.agentId, "reply", "conversation", obj("instruction" to "autonomy", "conversation" to e.conversation))))
@@ -402,7 +445,7 @@ class ImeController(private val context: Context, private val ime: ImeHost) : Br
 
     private fun send(strategy: SendStrategy): Boolean = when (strategy) {
         SendStrategy.IME_ACTION_SEND -> { ime.executor().submit(EditOp.Action(ImeActionKind.SEND)); ime.executor().flush(); true }
-        SendStrategy.ENTER_IS_SEND -> { ime.sendRawEnter(); true }
+        SendStrategy.ENTER_IS_SEND -> { ime.executor().flush(); ime.executor().sendEnterKey() }
         SendStrategy.A11Y_CLICK -> com.agentkeyboard.app.a11y.A11yActions.clickSend()
         SendStrategy.REMOTE_INPUT, SendStrategy.NONE -> false
     }
@@ -422,13 +465,33 @@ class ImeController(private val context: Context, private val ime: ImeHost) : Br
         return true
     }
 
+    /**
+     * `form.fill` (SPEC §11.7, FR-AU-08): the user approved [values] in the review sheet. The IME can
+     * only write to the focused field, so values are matched to fields deterministically
+     * ([FormFill.keyFor]) and written as focus reaches each one: now for the focused field, then on
+     * every field start in the same app within [FILL_WINDOW_MS]. Focus is advanced only where the
+     * field itself declares `next`; a field nothing matches is left untouched, and nothing is ever
+     * submitted.
+     */
     private fun fillForm(values: Map<String, String>) {
-        // Sequential focus + commit (SPEC §11.7): fill the focused field, then `next`. The shell drives
-        // field order from its review sheet; native only applies, never submits (FR-AU-08).
-        val key = ime.classification()?.context?.autofillHints?.firstOrNull { it in values }
-        val text = key?.let(values::get) ?: values.values.firstOrNull() ?: return
+        val c = ime.classification()?.context ?: return
+        pendingFill = PendingFill(c.packageName, LinkedHashMap(values), System.currentTimeMillis() + FILL_WINDOW_MS)
+        fillFocused(c)
+    }
+
+    private fun fillFocused(c: FieldContext) {
+        val p = pendingFill ?: return
+        if (p.packageName != c.packageName || System.currentTimeMillis() > p.expiresAt) {
+            pendingFill = null; return
+        }
+        val key = FormFill.keyFor(c, p.values.keys) ?: return // sensitive or unmatched: leave it alone
+        val text = p.values.remove(key) ?: return
         ime.executor().submit(EditOp.ReplaceField(text))
-        ime.executor().submit(EditOp.Action(ImeActionKind.NEXT))
+        if (p.values.isEmpty()) {
+            pendingFill = null
+        } else if (c.imeAction == ImeActionKind.NEXT) {
+            ime.executor().submit(EditOp.Action(ImeActionKind.NEXT))
+        }
     }
 
     private companion object {
@@ -437,5 +500,9 @@ class ImeController(private val context: Context, private val ime: ImeHost) : Br
         const val KEY_CONSENT_SETTING = "autonomy.consent"
         const val FORWARD_TIMEOUT_MS = 4_000L
         const val SNAPSHOT_TTL_MS = 30_000L
+        const val FILL_WINDOW_MS = 60_000L
+        const val KEY_HAPTICS = "keyboard.haptics"
+        const val KEY_SOUNDS = "keyboard.keySounds"
+        const val KEY_THEME = "keyboard.theme"
     }
 }

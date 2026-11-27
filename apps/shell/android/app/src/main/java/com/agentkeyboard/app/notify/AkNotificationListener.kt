@@ -53,18 +53,29 @@ class AkNotificationListener : NotificationListenerService() {
         AgentHub.post { it.onNotification(pkg, title, messages, remoteInputAvailable = reply != null) }
     }
 
-    /** `Notification.MessagingStyle` extras; a null sender means the device owner wrote it. */
+    /**
+     * `Notification.MessagingStyle` extras. The device owner's own messages have a null sender, or
+     * (common in practice) a sender equal to the style's user Person (`EXTRA_MESSAGING_PERSON`). Getting
+     * this wrong would make autonomy answer the user's own replies (FR-AU-04/05 loop protection).
+     */
     private fun messagingStyle(extras: Bundle): List<ChatMessage> {
         @Suppress("DEPRECATION")
         val raw: Array<Parcelable> = extras.getParcelableArray(Notification.EXTRA_MESSAGES) ?: return emptyList()
+        @Suppress("DEPRECATION")
+        val me: Person? = extras.getParcelable(Notification.EXTRA_MESSAGING_PERSON)
+        @Suppress("DEPRECATION") // still written by apps targeting < 28 MessagingStyle(CharSequence)
+        val myName = (me?.name ?: extras.getCharSequence(Notification.EXTRA_SELF_DISPLAY_NAME))?.toString()?.takeIf { it.isNotBlank() }
         return raw.takeLast(MAX_MESSAGES).mapIndexedNotNull { i, p ->
             val b = p as? Bundle ?: return@mapIndexedNotNull null
             val text = b.getCharSequence(KEY_TEXT)?.toString()?.takeIf { it.isNotBlank() } ?: return@mapIndexedNotNull null
             @Suppress("DEPRECATION")
             val person = b.getParcelable<Person>(KEY_SENDER_PERSON)
             val sender = (person?.name ?: b.getCharSequence(KEY_SENDER))?.toString()
+            val fromMe = sender == null ||
+                (me?.key != null && person?.key == me.key) ||
+                (person?.key == null && myName != null && sender == myName)
             val at = b.getLong(KEY_TIME)
-            ChatMessage("n_${at}_$i", fromMe = sender == null, author = sender ?: "Me", text = text, at = at)
+            ChatMessage("n_${at}_$i", fromMe = fromMe, author = if (fromMe) "Me" else sender.orEmpty(), text = text, at = at)
         }
     }
 

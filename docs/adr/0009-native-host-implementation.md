@@ -15,7 +15,7 @@
      bridge router, message decoders, editor ops, field classifier, autonomy reducer, privacy filter,
      conversation cache, and the whole `:agent` runtime.
    - Android classes translate platform callbacks into core calls and core effects into platform calls.
-   - Result: 101 JVM tests cover the decisions. They run under Gradle (`:core:test`) and in the
+   - Result: 107 JVM tests cover the decisions. They run under Gradle (`:core:test`) and in the
      no-SDK harness (`tools/verify-core.sh`).
 
 2. **Hand-rolled JSON with hard caps.**

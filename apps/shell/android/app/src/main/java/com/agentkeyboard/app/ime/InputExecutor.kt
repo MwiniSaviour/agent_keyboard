@@ -96,7 +96,9 @@ class InputExecutor(
             }
             is EditOp.ReplaceField -> {
                 val extracted = ic.getExtractedText(ExtractedTextRequest(), 0)
-                if (extracted?.text != null) ic.setSelection(0, extracted.text.length)
+                // Editors may return a partial window (startOffset > 0): select to the end of the
+                // whole text, not of the window, or the tail of a long field would survive.
+                if (extracted?.text != null) ic.setSelection(0, maxOf(0, extracted.startOffset) + extracted.text.length)
                 else ic.performContextMenuAction(android.R.id.selectAll)
                 ic.commitText(op.text, 1)
             }
@@ -124,6 +126,17 @@ class InputExecutor(
                 if (!ic.performEditorAction(id)) sendKey(ic, KeyEvent.KEYCODE_ENTER)
             }
         }
+    }
+
+    /**
+     * A soft-keyboard Enter key event, for apps whose "Enter is send" setting listens for the key
+     * rather than an editor action (autonomy strategy ENTER_IS_SEND, SPEC §11.6.3). Same flags as
+     * every other key this IME sends. Call [flush] first so the draft lands before the Enter.
+     */
+    fun sendEnterKey(): Boolean {
+        val ic = connection() ?: return false
+        sendKey(ic, KeyEvent.KEYCODE_ENTER)
+        return true
     }
 
     private fun sendKey(ic: InputConnection, code: Int) {

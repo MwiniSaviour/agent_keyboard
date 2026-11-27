@@ -74,4 +74,23 @@ describe('KeyboardController', () => {
     c.grantConsent('draft');
     expect(store.get().autonomy.enabled).toBe(true);
   });
+
+  it('sends text.delete in code points so backspace never eats the character before an emoji', async () => {
+    const { c, host, bridge, dispose } = await setup();
+    cleanup = dispose;
+    const sent: Array<{ before: number; after: number }> = [];
+    const send = bridge.send.bind(bridge);
+    bridge.send = ((type: string, payload: never) => {
+      if (type === 'text.delete') sent.push(payload);
+      return send(type as never, payload);
+    }) as typeof bridge.send;
+    c.insertText('a👍');
+    c.backspace('grapheme');
+    expect(sent.at(-1)).toEqual({ before: 1, after: 0 }); // 1 code point, though 2 UTF-16 units
+    expect(fullText(host.editor())).toBe('a'); // the 'a' before the emoji survived
+    c.insertText('👨‍👩‍👧');
+    c.backspace('grapheme');
+    expect(sent.at(-1)).toEqual({ before: 5, after: 0 }); // ZWJ family: 5 code points, 8 units
+    expect(fullText(host.editor())).toBe('a');
+  });
 });

@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+  codePointLength,
   createDevPredictor,
+  deleteSurroundingCodePoints,
+  toWireDelete,
   currentWord,
   editDistance,
   englishDevLexicon,
@@ -112,3 +115,19 @@ describe('dev predictor', () => {
     expect(editDistance('teh', 'the')).toBe(1);
   });
 });
+
+describe('wire delete units (code points, SPEC §8.2)', () => {
+  it('counts code points, not UTF-16 units', () => {
+    expect(codePointLength('ab')).toBe(2);
+    expect(codePointLength('👍')).toBe(1);
+    expect(codePointLength('👨‍👩‍👧')).toBe(5);
+    expect(codePointLength('\ud83d')).toBe(1); // lone surrogate counts as one, like Java
+  });
+  it('round-trips a mirror delete through the wire', () => {
+    const s = { before: 'x👍🏽', after: '😀y', selected: '' };
+    const wire = toWireDelete(s, 4, 2); // 👍🏽 = 4 units = 2 code points; 😀 = 2 units = 1 code point
+    expect(wire).toEqual({ before: 2, after: 1 });
+    expect(deleteSurroundingCodePoints(s, wire.before, wire.after)).toEqual({ before: 'x', after: 'y', selected: '' });
+  });
+});
+

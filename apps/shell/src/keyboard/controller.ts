@@ -20,10 +20,11 @@ import {
   moveCursor,
   reduce,
   replaceText,
+  toWireDelete,
   type EngineEvent,
   type Predictor,
 } from '@ak/keyboard-engine';
-import { settingsStore } from '@/lib/settings';
+import { NATIVE_SETTINGS, settingsStore, systemThemeStore } from '@/lib/settings';
 import { uid } from '@/lib/store';
 import type { Panel, ShellStore } from './shell-store';
 
@@ -91,7 +92,9 @@ export class KeyboardController {
         s.set({ voice: { partial: '', level: 0 } });
       }),
       b.on('agents.changed', () => void this.loadAgents()),
+      b.on('theme.update', ({ systemDark }) => systemThemeStore.set({ dark: systemDark })),
     );
+    this.syncNativeSettings();
 
     void b
       .request('hello', { shellVersion: '0.1.0' })
@@ -100,6 +103,26 @@ export class KeyboardController {
     void this.loadAgents();
 
     return () => this.dispose();
+  }
+
+  /**
+   * Mirrors `NATIVE_SETTINGS` to the IME host (it performs haptics/sounds and themes the native
+   * fallback keyboard). Sent once at start, so native converges after its data was cleared, then on
+   * change. Only the IME needs them; the companion and the web mock do not.
+   */
+  private syncNativeSettings(): void {
+    if (this.bridge.kind !== 'ime') return;
+    const sent: Partial<Record<(typeof NATIVE_SETTINGS)[number], unknown>> = {};
+    const push = () => {
+      const current = settingsStore.get();
+      for (const k of NATIVE_SETTINGS) {
+        if (Object.is(sent[k], current[k])) continue;
+        sent[k] = current[k];
+        this.bridge.send('settings.set', { key: `keyboard.${k}`, value: current[k] });
+      }
+    };
+    push();
+    this.unsubs.push(settingsStore.subscribe(push));
   }
 
   dispose(): void {
@@ -144,11 +167,14 @@ export class KeyboardController {
           this.store.set({ editor });
           this.bridge.send('text.commit', { text: e.text });
           break;
-        case 'delete':
+        case 'delete': {
+          // The engine counts UTF-16 units; the wire counts code points (SPEC §8.2).
+          const wire = toWireDelete(editor, e.before);
           editor = deleteSurrounding(editor, e.before);
           this.store.set({ editor });
-          this.bridge.send('text.delete', { before: e.before, after: 0 });
+          this.bridge.send('text.delete', wire);
           break;
+        }
         case 'action':
           this.bridge.send('editor.action', { action: e.action });
           break;
