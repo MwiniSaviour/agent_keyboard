@@ -1,0 +1,23 @@
+# deps
+node_modules/
+# build outputs
+.next/
+out/
+dist/
+build/
+coverage/
+*.tsbuildinfo
+# native
+apps/shell/android/app/build/
+apps/shell/android/.gradle/
+apps/shell/ios/App/Pods/
+# models are NEVER committed (downloaded at runtime, see SPEC §12.6)
+*.litertlm
+*.gguf
+*.onnx
+*.tflite
+# env / os
+.env*
+!.env.example
+.DS_Store
+*.log

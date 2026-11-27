@@ -1,0 +1,38 @@
+{
+  "name": "@ak/shell",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Agent Shell: the keyboard surface (/ime) and companion app, statically exported for Capacitor and the Android IME WebView.",
+  "type": "module",
+  "sideEffects": [
+    "*.css"
+  ],
+  "scripts": {
+    "dev": "next dev -H 0.0.0.0 -p 3000",
+    "build": "next build && node scripts/csp.mjs",
+    "preview": "node scripts/serve-static.mjs out 3000",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "cap:sync": "npm run build:native && cap sync",
+    "cap:android": "cap add android",
+    "build:native": "NEXT_PUBLIC_AK_MOCK=0 next build && node scripts/csp.mjs",
+    "size": "node scripts/size.mjs"
+  },
+  "dependencies": {
+    "@ak/keyboard-engine": "*",
+    "@ak/protocol": "*",
+    "@capacitor/android": "^8.6.3",
+    "@capacitor/core": "^8.6.3",
+    "next": "^16.4.6",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.6.3",
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "typescript": "5.9.3",
+    "vitest": "^5.1.2"
+  }
+}

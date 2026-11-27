@@ -1,0 +1,138 @@
+apply plugin: 'com.android.application'
+apply plugin: 'org.jetbrains.kotlin.android'
+
+android {
+    namespace = "com.agentkeyboard.app"
+    compileSdk = rootProject.ext.compileSdkVersion
+    defaultConfig {
+        applicationId "com.agentkeyboard.app"
+        minSdkVersion rootProject.ext.minSdkVersion
+        targetSdkVersion rootProject.ext.targetSdkVersion
+        versionCode 1
+        versionName "0.2.0"
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        // 64-bit only (ADR-0012): every phone that meets Tier S (4 GB+) is arm64, and x86_64 covers the
+        // emulator. Dropping the 32-bit copies of the native libraries (sherpa-onnx, LiteRT-LM, SQLCipher)
+        // keeps the APK light; models themselves are never in the APK.
+        ndk { abiFilters 'arm64-v8a', 'x86_64' }
+        // Signed model catalog (SPEC §12.6, ADR-0011). Set in ~/.gradle/gradle.properties or with -P:
+        //   ak.modelManifestUrl  = https URL of the signed models.json
+        //   ak.modelManifestKeys = keyId:base64Spki[,keyId:base64Spki]  (scripts/models/manifest.mjs keygen)
+        // Unset → the Models screen reports "no catalog configured" and nothing is downloaded.
+        buildConfigField "String", "MODEL_MANIFEST_URL", "\"${project.findProperty('ak.modelManifestUrl') ?: ''}\""
+        buildConfigField "String", "MODEL_MANIFEST_KEYS", "\"${project.findProperty('ak.modelManifestKeys') ?: ''}\""
+        aaptOptions {
+             // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
+             // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
+            ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
+        }
+    }
+
+    buildFeatures {
+        aidl = true
+        buildConfig = true
+    }
+
+    // ADR-0006 / SPEC §17.2: Play builds never perform accessibility actions; `full` (sideload) may.
+    // SPEC §17: the `offline` network flavor ships without the INTERNET permission.
+    flavorDimensions = ["distribution", "network"]
+    productFlavors {
+        play {
+            dimension "distribution"
+            buildConfigField "boolean", "A11Y_ACTIONS", "false"
+            // Play restricts all-files access: the model scan uses granted folders only (ADR-0012).
+            buildConfigField "boolean", "ALL_FILES", "false"
+        }
+        full {
+            dimension "distribution"
+            applicationIdSuffix ".full"
+            buildConfigField "boolean", "A11Y_ACTIONS", "true"
+            buildConfigField "boolean", "ALL_FILES", "true"
+        }
+        online {
+            dimension "network"
+            buildConfigField "boolean", "ONLINE", "true"
+        }
+        offline {
+            dimension "network"
+            applicationIdSuffix ".offline"
+            // No INTERNET permission: models and the signed catalog are imported from files.
+            buildConfigField "boolean", "ONLINE", "false"
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    packaging {
+        // Play's 16 KB page-size requirement (SPEC §12.6): keep native libs uncompressed and aligned.
+        jniLibs { useLegacyPackaging = false }
+    }
+}
+
+kotlin {
+    jvmToolchain(21)
+}
+
+// sherpa-onnx is not on Maven Central: fetch the pinned release AAR into build/ (never committed) and
+// refuse it unless its SHA-256 matches variables.gradle.
+def sherpaAar = layout.buildDirectory.file("sherpa/sherpa-onnx-static-link-onnxruntime-${sherpaOnnxVersion}.aar").get().asFile
+def fetchSherpaOnnx = tasks.register('fetchSherpaOnnx') {
+    outputs.file(sherpaAar)
+    doLast {
+        def digest = { File f ->
+            def md = java.security.MessageDigest.getInstance('SHA-256')
+            f.withInputStream { is -> byte[] buf = new byte[1 << 16]; int n; while ((n = is.read(buf)) > 0) md.update(buf, 0, n) }
+            md.digest().encodeHex().toString()
+        }
+        if (sherpaAar.isFile() && digest(sherpaAar) == sherpaOnnxSha256) return
+        sherpaAar.parentFile.mkdirs()
+        def url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/v${sherpaOnnxVersion}/sherpa-onnx-static-link-onnxruntime-${sherpaOnnxVersion}.aar"
+        def tmp = new File(sherpaAar.path + '.part')
+        new URL(url).withInputStream { input -> tmp.withOutputStream { it << input } }
+        def got = digest(tmp)
+        if (got != sherpaOnnxSha256) { tmp.delete(); throw new GradleException("sherpa-onnx AAR digest mismatch: $got") }
+        if (!tmp.renameTo(sherpaAar)) throw new GradleException("couldn't move the sherpa-onnx AAR into place")
+    }
+}
+
+repositories {
+    flatDir{
+        dirs '../capacitor-cordova-android-plugins/src/main/libs', 'libs'
+    }
+}
+
+dependencies {
+    implementation fileTree(include: ['*.jar'], dir: 'libs')
+    implementation project(':core')
+    implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
+    implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
+    implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
+    implementation "androidx.core:core:$androidxCoreVersion"
+    implementation "androidx.webkit:webkit:$androidxWebkitVersion"
+    implementation "net.zetetic:sqlcipher-android:$sqlcipherVersion@aar"
+    implementation "androidx.sqlite:sqlite:$androidxSqliteVersion"
+    implementation "com.google.ai.edge.litertlm:litertlm-android:$litertlmVersion"
+    implementation files(sherpaAar).builtBy(fetchSherpaOnnx)
+    implementation project(':capacitor-android')
+    testImplementation "junit:junit:$junitVersion"
+    androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
+    androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
+    implementation project(':capacitor-cordova-android-plugins')
+}
+
+apply from: 'capacitor.build.gradle'
+
+try {
+    def servicesJSON = file('google-services.json')
+    if (servicesJSON.text) {
+        apply plugin: 'com.google.gms.google-services'
+    }
+} catch(Exception e) {
+    logger.info("google-services.json not found, google-services plugin not applied. Push Notifications won't work")
+}

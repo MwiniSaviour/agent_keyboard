@@ -1,0 +1,417 @@
+/**
+ * Shared domain types. These mirror the Kotlin data classes of the native host (SPEC §9–§11);
+ * keep both sides in sync via the contract fixtures (SPEC §19.1).
+ */
+
+// ───────────────────────────── Editor / field ─────────────────────────────
+
+/** Semantic kind of the focused field, derived natively from EditorInfo (SPEC §9). */
+export type InputKind =
+  | 'text'
+  | 'multiline'
+  | 'email'
+  | 'url'
+  | 'phone'
+  | 'number'
+  | 'search'
+  | 'name'
+  | 'password'
+  | 'otp';
+
+export type ImeAction = 'none' | 'send' | 'search' | 'go' | 'next' | 'done' | 'newline';
+
+export type CapsMode = 'none' | 'sentences' | 'words' | 'characters';
+
+export interface FieldContext {
+  /** Host app package, e.g. "com.whatsapp". */
+  package: string;
+  appLabel: string;
+  kind: InputKind;
+  imeAction: ImeAction;
+  capsMode: CapsMode;
+  hint?: string;
+  label?: string;
+  /** Autofill hints declared by the host (e.g. "emailAddress"). */
+  autofillHints?: string[];
+  /**
+   * True for password/OTP/payment fields. Enforced natively (FR-KB-14): when true the native host
+   * drops all agent/context/learning traffic regardless of what the shell sends.
+   */
+  sensitive: boolean;
+}
+
+/** Text around the cursor, bounded natively (≤ 2,000 chars each side). */
+export interface EditorState {
+  before: string;
+  after: string;
+  /** Selected text (empty when the selection is collapsed). */
+  selected: string;
+}
+
+// ───────────────────────────── Screen context ─────────────────────────────
+
+export type ScreenType = 'chat' | 'form' | 'article' | 'feed' | 'email' | 'unknown';
+export type AppCategory = 'chat' | 'email' | 'browser' | 'social' | 'docs' | 'other';
+
+export interface ChatMessage {
+  id: string;
+  from: 'me' | 'them';
+  author: string;
+  text: string;
+  at: number;
+}
+
+export interface FormField {
+  id: string;
+  label: string;
+  kind: InputKind;
+  autofillHint?: string;
+  required: boolean;
+  /** Never populated for sensitive fields. */
+  value?: string;
+}
+
+export interface ScreenImage {
+  /** Opaque, in-memory frame handle (SPEC §10.4). Frames never touch disk and expire with the snapshot. */
+  handle: string;
+  caption?: string;
+  /** Frame size in px after downscaling (rung 3, ADR-0010). */
+  width?: number;
+  height?: number;
+  /** Small `data:image/jpeg;base64,…` thumbnail so the Lens panel can show exactly what the agent sees. */
+  preview?: string;
+}
+
+/** How sure the host is that `chat` is the conversation on screen (rung 1 has no window title). */
+export type ChatMatch = 'exact' | 'likely' | 'uncertain';
+
+/** Result of a scroll-and-read pass (`context.scan`, ADR-0010). */
+export interface ScanInfo {
+  /** Screens read, including the visible one. */
+  pages: number;
+  /** True when the scroll reached the start/end of the content (or nothing scrolls). */
+  complete: boolean;
+  /** The original scroll position was restored afterwards. */
+  restored: boolean;
+}
+
+export interface ScreenContext {
+  app: { package: string; label: string; category: AppCategory };
+  screenType: ScreenType;
+  field: FieldContext;
+  chat?: { title: string; participants: string[]; messages: ChatMessage[]; match?: ChatMatch };
+  form?: { title?: string; fields: FormField[] };
+  text?: { title?: string; body: string; selection?: string };
+  images?: ScreenImage[];
+  sensitivity: { secureWindow: boolean; sensitiveField: boolean; blockedApp: boolean };
+  /** Present when the snapshot came from a scroll-and-read pass. */
+  scan?: ScanInfo;
+  /** Which rung of the cost ladder produced this snapshot (SPEC §10.1, ADR-0005). */
+  rung: 0 | 1 | 2 | 3 | 4;
+  capturedAt: number;
+  ttlMs: number;
+}
+
+// ───────────────────────────── Agents ─────────────────────────────
+
+export type AutonomyLevel = 'off' | 'suggest' | 'draft' | 'auto';
+
+export type AgentTone = 'neutral' | 'friendly' | 'formal' | 'persuasive' | 'concise';
+
+export interface QuickReply {
+  id: string;
+  title: string;
+  text: string;
+}
+
+export interface ResourceRef {
+  id: string;
+  name: string;
+  kind: 'pdf' | 'txt' | 'md' | 'docx' | 'url' | 'note';
+  bytes: number;
+  /** Indexing status in the local vector store (SPEC §14). */
+  status: 'pending' | 'indexed' | 'failed';
+}
+
+export const AGENT_ROLE_MAX_CHARS = 15_000;
+
+export interface AgentDefinition {
+  id: string;
+  kind: 'general' | 'custom';
+  name: string;
+  /**
+   * Optional 1–2 character monogram for the avatar (e.g. "Aa"). Empty → derived from `name`.
+   * Rendered as text in the UI font, never as an emoji/symbol glyph (consistent across OEM fonts).
+   */
+  icon: string;
+  /** One-line description shown in the switcher. */
+  tagline: string;
+  /** System-prompt body; ≤ AGENT_ROLE_MAX_CHARS. */
+  role: string;
+  tone: AgentTone;
+  languages: string[];
+  knowledge: ResourceRef[];
+  quickReplies: QuickReply[];
+  appScope: string[] | 'all';
+  autonomyCeiling: AutonomyLevel;
+  shareGeneralMemory: boolean;
+  createdAt: number;
+  updatedAt: number;
+  version: number;
+}
+
+// ───────────────────────────── Skills / runs ─────────────────────────────
+
+export type SkillId =
+  | 'complete'
+  | 'refine'
+  | 'reply'
+  | 'explain'
+  | 'define'
+  | 'summarize'
+  | 'translate'
+  | 'fill_form'
+  | 'describe_image'
+  | 'transcribe_refine';
+
+export type RunTarget = 'field' | 'selection' | 'word' | 'conversation' | 'screen' | 'image';
+
+export type RefineStyle =
+  | 'fix'
+  | 'shorter'
+  | 'longer'
+  | 'formal'
+  | 'friendly'
+  | 'persuasive'
+  | 'simplify'
+  | 'emojify';
+
+export interface AgentRunRequest {
+  /** Generated by the caller so stream events can be correlated before any reply arrives. */
+  runId: string;
+  agentId: string;
+  skill: SkillId;
+  target: RunTarget;
+  params?: { style?: RefineStyle; language?: string; word?: string; instruction?: string };
+}
+
+export type ResultActionId = 'apply' | 'insert' | 'copy' | 'speak' | 'retry';
+
+export interface AgentRunResult {
+  runId: string;
+  text: string;
+  /**
+   * Structured output for structured skills (e.g. fill_form → field key → value). Autonomy drafts carry
+   * `confidence` here as a decimal string ("0.82"); when it is missing the native autonomy machine
+   * treats the draft as low confidence and escalates (FR-AU-04, fail-safe).
+   */
+  data?: Record<string, string>;
+  actions: ResultActionId[];
+  /** How `apply` should be executed. */
+  apply?: { mode: 'replaceField' | 'replaceSelection' | 'insert' | 'fillForm' };
+  model: string;
+  latencyMs: { ttft: number; total: number };
+}
+
+// ───────────────────────────── Autonomy ─────────────────────────────
+
+/** States of the autonomy state machine (SPEC §11.6.1). */
+export type AutonomyPhase =
+  | 'off'
+  | 'arming'
+  | 'observing'
+  | 'planning'
+  | 'review'
+  | 'typing'
+  | 'awaiting_user'
+  | 'sending'
+  | 'cooldown'
+  | 'paused'
+  | 'escalated';
+
+// ───────────────────────────── Strip / insights ─────────────────────────────
+
+export interface Suggestion {
+  text: string;
+  kind: 'completion' | 'correction' | 'next' | 'verbatim';
+  /** Highlight as the auto-correct candidate. */
+  primary?: boolean;
+}
+
+export interface Insight {
+  id: string;
+  text: string;
+  /** What tapping the insight does. */
+  run: Omit<AgentRunRequest, 'runId' | 'agentId'>;
+  /** Higher wins when several insights compete (FR-UI-02). */
+  score: number;
+}
+
+// ───────────────────────────── Misc ─────────────────────────────
+
+export interface ClipboardItem {
+  id: string;
+  text: string;
+  pinned: boolean;
+  at: number;
+}
+
+export type ThemeMode = 'light' | 'dark' | 'system';
+
+export type DeviceTier = 'S' | 'M' | 'L';
+
+/** Host integration status, shown in the companion's setup checklist (SPEC §9, §17.2). */
+export interface SystemStatus {
+  /** Our keyboard is enabled in system settings. */
+  imeEnabled: boolean;
+  /** Our keyboard is the current default input method. */
+  imeSelected: boolean;
+  /** Notification access granted (rung 1 context + RemoteInput replies). */
+  notificationAccess: boolean;
+  /** Read-only screen reading (accessibility) enabled (rung 2 context). */
+  screenReading: boolean;
+  /** `play` never performs accessibility actions; `full` may (ADR-0006). */
+  flavor: 'play' | 'full' | 'web';
+  tier: DeviceTier;
+  totalRamMb: number;
+  /** A generative model pack is installed (Part 3); AI skills report `unavailable` until then. */
+  modelsInstalled: boolean;
+  /** The user has given Autopilot consent (FR-AU-02). The companion offers "Withdraw consent" when true. */
+  autonomyConsent: boolean;
+}
+
+/**
+ * `microphone`: the app's permission page (voice typing needs RECORD_AUDIO; the IME can't ask).
+ * `all_files`: all-files access so the model scan reaches all shared storage (`full` flavor only).
+ */
+export type SystemSettingsTarget = 'ime_settings' | 'ime_picker' | 'notification_access' | 'accessibility' | 'microphone' | 'all_files';
+
+export interface Capabilities {
+  protocol: number;
+  platform: 'android-ime' | 'android-app' | 'ios-keyboard' | 'web';
+  tier: DeviceTier;
+  /** Native host computes suggestions (true in the IME); otherwise the shell's dev predictor is used. */
+  nativeSuggestions: boolean;
+  voice: boolean;
+  tts: boolean;
+  screenContext: boolean;
+  /** `context.snapshot {scope:"visual"}` can return screen pixels (rung 3). */
+  visualContext: boolean;
+  autonomy: boolean;
+  /** Live screen capture (`screen.capture`, MediaProjection with per-session consent, ADR-0010). */
+  screenCapture: boolean;
+  /** Scroll-and-read of the app under the keyboard (`context.scan`, needs screen reading). */
+  screenScan: boolean;
+}
+
+/** Live capture lifecycle (`screen.state`). `paused` carries the reason in `detail`. */
+export type ScreenCaptureStatus = 'off' | 'starting' | 'live' | 'paused';
+
+// ───────────────────────────── Models (SPEC §12, ADR-0011) ─────────────────────────────
+
+export type ModelKind = 'llm' | 'vlm' | 'embedding' | 'stt' | 'tts';
+
+/**
+ * Lifecycle of one pack. `paused` keeps the partial file for resume (cancelled, waiting for Wi-Fi, or
+ * the process stopped); `failed` carries a user-presentable `error`.
+ */
+export type ModelPackState = 'available' | 'queued' | 'downloading' | 'paused' | 'installed' | 'failed';
+
+export interface ModelPack {
+  id: string;
+  name: string;
+  kind: ModelKind;
+  /** What the user gets from it, one line. */
+  role: string;
+  sizeBytes: number;
+  /** SPDX id or licence name (Gemma Terms, Apache-2.0, …), surfaced in-app (SPEC §12.6). */
+  license: string;
+  licenseUrl?: string;
+  /** The pick for this phone (same as `fit === 'recommended'`). */
+  core: boolean;
+  state: ModelPackState;
+  /** Bytes on disk (partial or complete). */
+  receivedBytes: number;
+  /** Why it is paused or failed. */
+  detail?: string;
+  /** Installed, and the signed catalog now lists a newer build of it. */
+  updateAvailable?: boolean;
+  /** How it suits this phone's memory and speed (ADR-0012); `fitDetail` says why in one line. */
+  fit?: ModelFit;
+  fitDetail?: string;
+  /** Installed and the model used for its job (text or voice); `models.use` changes it. */
+  active?: boolean;
+  /** Found on the phone, not in the signed catalog: the user chose to trust it. */
+  custom?: boolean;
+}
+
+/**
+ * `recommended`: the smartest model that runs smoothly here. `good`: runs well, a different
+ * trade-off. `slow`: fits but slow or memory-hungry (allowed, with a warning). `too_big`: refused.
+ */
+export type ModelFit = 'recommended' | 'good' | 'slow' | 'too_big';
+
+/** What the recommendations were based on. `ramLabel` is RAM as sold ("8 GB"). */
+export interface DeviceInfo {
+  ramMb: number;
+  ramLabel: string;
+  gpu: boolean;
+  soc?: string;
+}
+
+/**
+ * A model file already on the phone (ADR-0012). `verified`: it matches a catalog entry by name and
+ * size, and is installed only if every byte hashes to the signed catalog. Otherwise it is an unknown
+ * model the user may choose to trust (`models.adopt {trust: true}`). Either way it is copied, never
+ * loaded in place.
+ */
+export interface FoundModel {
+  id: string;
+  name: string;
+  kind: ModelKind;
+  sizeBytes: number;
+  /** Human-readable folder ("Download"). */
+  where: string;
+  verified: boolean;
+  entryId?: string;
+}
+
+/**
+ * Where the scan may look: `app` (this app's own folders and Downloads it can see), `folders` (plus
+ * folders the user granted), `all` (all-files access). `allFilesOption`: this build can ask for it.
+ */
+export interface ModelScan {
+  state: 'idle' | 'scanning';
+  access: 'app' | 'folders' | 'all';
+  folders: number;
+  allFilesOption: boolean;
+}
+
+/**
+ * `ready`: a verified catalog is cached. `unconfigured`: this build has no catalog URL or signing key.
+ * `unavailable`: no catalog yet and it can't be fetched (offline, or the offline flavor before an
+ * import). `invalid`: the catalog failed signature or schema checks and was ignored.
+ */
+export type ModelCatalogState = 'ready' | 'loading' | 'unconfigured' | 'unavailable' | 'invalid';
+
+export interface ModelsStatus {
+  tier: DeviceTier;
+  /** `download` (online builds) or `import` (the offline flavor installs files picked on the phone). */
+  source: 'download' | 'import';
+  catalog: ModelCatalogState;
+  catalogDetail?: string;
+  packs: ModelPack[];
+  /** Free bytes in app-private storage. */
+  freeBytes: number;
+  /** Downloads wait for an unmetered network (default true). Settings key `models.wifiOnly`. */
+  wifiOnly: boolean;
+  /** The generative model currently in memory and the backend it runs on (one at a time, ADR-0004). */
+  resident?: { id: string; backend: 'npu' | 'gpu' | 'cpu' };
+  device?: DeviceInfo;
+  /** Models found on the phone and not installed yet (omitted when none). */
+  found?: FoundModel[];
+  /** Absent where the host can't scan. */
+  scan?: ModelScan;
+  /** RECORD_AUDIO is granted. */
+  micGranted?: boolean;
+}

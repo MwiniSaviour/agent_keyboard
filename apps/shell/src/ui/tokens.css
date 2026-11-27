@@ -1,0 +1,79 @@
+/*
+ * Design tokens — monochrome reference (SPEC §7.4). Scoped by [data-ak-theme] so the keyboard can
+ * follow the host/system theme independently of the companion app.
+ */
+:root {
+  --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --dur-fast: 90ms;
+  --dur-med: 160ms;
+  --key-radius: 9px;
+  --key-gap: 6px;
+  --key-h: 46px;
+  --bar-h: 52px;
+  --strip-h: 40px;
+  --font-emoji: 'Noto Color Emoji', 'Apple Color Emoji', 'Segoe UI Emoji', sans-serif;
+}
+
+[data-ak-theme='light'] {
+  --board-bg: #f2f2f0;
+  --board-fg: #0a0a0a;
+  --key-bg: #ffffff;
+  --key-bg-pressed: #e4e4e1;
+  --key-fg: #0a0a0a;
+  --key-hint: rgba(10, 10, 10, 0.6);
+  --key-shadow: 0 1px 0 rgba(0, 0, 0, 0.22), 0 1px 3px rgba(0, 0, 0, 0.08);
+  --mod-bg: #0a0a0a;
+  --mod-bg-pressed: #2b2b2b;
+  --mod-fg: #ffffff;
+  --pill-bg: #0a0a0a;
+  --pill-fg: #ffffff;
+  --strip-bg: #e6e6e3;
+  --strip-fg: #0a0a0a;
+  --surface: #ffffff;
+  --surface-2: #f7f7f5;
+  --line: rgba(10, 10, 10, 0.12);
+  /* 0.64 alpha → ≈#5f5f5f on white (6.4:1) and on #f2f2f0 (5.8:1); was 4.4:1. */
+  --muted: rgba(10, 10, 10, 0.64);
+  --border-strong: rgba(10, 10, 10, 0.14);
+  --placeholder: rgba(10, 10, 10, 0.6); /* ≈#6c6c6c, 5.2:1 on white */
+  --focus: #0a0a0a;
+  --selection: rgba(10, 10, 10, 0.16);
+  --page-bg: #f2f2f0;
+  --toggle-track: #ffffff;
+  --toggle-border: #0a0a0a;
+  --toggle-knob: #0a0a0a;
+  --danger: #b00020;
+  --preview-bg: #ffffff;
+}
+
+[data-ak-theme='dark'] {
+  --board-bg: #000000;
+  --board-fg: #ffffff;
+  --key-bg: #2a2a2a;
+  --key-bg-pressed: #444444;
+  --key-fg: #ffffff;
+  --key-hint: rgba(255, 255, 255, 0.6);
+  --key-shadow: none;
+  --mod-bg: #ffffff;
+  --mod-bg-pressed: #d6d6d6;
+  --mod-fg: #0a0a0a;
+  --pill-bg: #ffffff;
+  --pill-fg: #0a0a0a;
+  --strip-bg: #262626;
+  --strip-fg: #ffffff;
+  --surface: #141414;
+  --surface-2: #1d1d1d;
+  --line: rgba(255, 255, 255, 0.14);
+  --muted: rgba(255, 255, 255, 0.64);
+  --border-strong: rgba(255, 255, 255, 0.16);
+  --placeholder: rgba(255, 255, 255, 0.55);
+  --focus: #ffffff;
+  --selection: rgba(255, 255, 255, 0.24);
+  --page-bg: #000000;
+  --toggle-track: #000000;
+  --toggle-border: #ffffff;
+  --toggle-knob: #ffffff;
+  --danger: #ff6b81;
+  --preview-bg: #3a3a3a;
+}

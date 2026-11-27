@@ -1,0 +1,26 @@
+ext {
+    minSdkVersion = 29
+    compileSdkVersion = 36
+    targetSdkVersion = 36
+    androidxActivityVersion = '1.11.0'
+    androidxAppCompatVersion = '1.7.1'
+    androidxCoordinatorLayoutVersion = '1.3.0'
+    androidxCoreVersion = '1.17.0'
+    androidxFragmentVersion = '1.8.9'
+    coreSplashScreenVersion = '1.2.0'
+    androidxWebkitVersion = '1.14.0'
+    junitVersion = '4.13.2'
+    androidxJunitVersion = '1.3.0'
+    androidxEspressoCoreVersion = '3.7.0'
+    cordovaAndroidVersion = '14.0.1'
+    // Agent Keyboard native host (Part 2)
+    sqlcipherVersion = '4.20.0'
+    androidxSqliteVersion = '2.7.0'
+    // Part 3: the only generative runtime (ADR-0004/0011). Bump with tools/app-stubs/com/google/ai/edge/litertlm.
+    litertlmVersion = '0.20.0'
+    // Part 4: streaming speech-to-text (SPEC §13, ADR-0012). The official release AAR with ONNX Runtime
+    // linked statically (one .so per ABI), fetched from GitHub and checked against GitHub's published
+    // digest. Bump with tools/app-stubs/com/k2fsa/sherpa/onnx.
+    sherpaOnnxVersion = '2.0.3'
+    sherpaOnnxSha256 = '7744a3a8f08f017d59c2d8ed8d9b700345561f5abe9f4e06dc6eaef3a0b977b4'
+}

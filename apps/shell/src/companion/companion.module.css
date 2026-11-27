@@ -1,0 +1,350 @@
+/*
+ * Companion app (agents, models, settings). Every colour comes from ui/tokens.css via
+ * [data-ak-theme] on .page, so light/dark share one rule set with the keyboard.
+ */
+.page {
+  min-height: 100dvh;
+  background: var(--page-bg);
+  color: var(--board-fg);
+}
+.wrap {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 12px 16px 48px;
+}
+.top {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 52px;
+}
+.back {
+  width: 44px;
+  height: 44px;
+  margin-left: -10px;
+  display: grid;
+  place-items: center;
+  border-radius: 12px;
+  color: inherit;
+}
+.title {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  flex: 1;
+  margin: 0;
+}
+
+/* Primary navigation: one equal-width segmented bar, never clipped at 320px. */
+.tabs {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: 2px;
+  margin: 6px 0 20px;
+  padding: 3px;
+  border-radius: 999px;
+  background: var(--strip-bg);
+}
+.tabs a {
+  display: grid;
+  place-items: center;
+  min-height: 40px;
+  padding: 0 6px;
+  border-radius: 999px;
+  color: inherit;
+  text-decoration: none;
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.tabs a[aria-current='page'] {
+  background: var(--pill-bg);
+  color: var(--pill-fg);
+}
+
+.card {
+  background: var(--surface);
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  padding: 16px;
+  margin-bottom: 12px;
+}
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 64px;
+  padding: 12px 12px 12px 14px;
+  background: var(--surface);
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  color: inherit;
+  text-decoration: none;
+}
+.item:active {
+  background: var(--surface-2);
+}
+.avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--pill-bg);
+  color: var(--pill-fg);
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  flex: none;
+}
+.grow {
+  flex: 1;
+  min-width: 0;
+}
+.name {
+  font-weight: 600;
+}
+.muted {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.4;
+}
+.pill {
+  flex: none;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  color: var(--muted);
+}
+.label {
+  display: block;
+  font-size: 14px;
+  font-weight: 600;
+  margin: 16px 0 6px;
+}
+.field {
+  width: 100%;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  border-radius: 14px;
+  padding: 12px 14px;
+  font-size: 16px;
+  outline: none;
+}
+.field:focus {
+  border-color: var(--board-fg);
+}
+.field:disabled {
+  color: var(--muted);
+}
+.monogram {
+  width: 58px;
+  flex: none;
+  text-align: center;
+  font-weight: 700;
+}
+textarea.field {
+  min-height: 200px;
+  resize: vertical;
+  line-height: 1.5;
+}
+.counter {
+  text-align: right;
+  font-size: 12px;
+  margin-top: 4px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.help {
+  font-size: 13px;
+  color: var(--muted);
+  margin: 4px 0 0;
+  line-height: 1.45;
+}
+.drop {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 22px;
+  border: 1.5px dashed var(--border-strong);
+  border-radius: 16px;
+  font-size: 14px;
+  cursor: pointer;
+  text-align: center;
+}
+.drop input {
+  display: none;
+}
+.row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.seg {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.seg button {
+  min-height: 36px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  font-size: 14px;
+  font-weight: 600;
+}
+.seg button[aria-pressed='true'] {
+  background: var(--pill-bg);
+  color: var(--pill-fg);
+  border-color: transparent;
+}
+.primary {
+  height: 48px;
+  padding: 0 24px;
+  border-radius: 999px;
+  background: var(--pill-bg);
+  color: var(--pill-fg);
+  font-weight: 700;
+  font-size: 15px;
+}
+.primary:disabled {
+  opacity: 0.4;
+}
+.ghost {
+  height: 48px;
+  padding: 0 18px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  font-weight: 600;
+}
+.danger {
+  composes: ghost;
+  color: var(--danger);
+  border-color: currentColor;
+}
+/* Save bar: full-width, opaque, pinned to the viewport bottom so it never floats over content. */
+.footer {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin: 8px -16px -48px;
+  padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
+  background: var(--page-bg);
+  border-top: 1px solid var(--line);
+}
+.errors {
+  color: var(--danger);
+  font-size: 14px;
+  margin: 8px 0 0;
+  padding-left: 18px;
+}
+.setRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 56px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 15px;
+}
+/* Rows whose control has more options than fit beside the label: label above, control below. */
+.setRowStack {
+  composes: setRow;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+}
+.setRow:last-child {
+  border-bottom: 0;
+}
+.switch {
+  position: relative;
+  width: 48px;
+  height: 28px;
+  border-radius: 999px;
+  border: 2px solid currentColor;
+  flex: none;
+}
+.switch::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: currentColor;
+  transition: transform var(--dur-med) var(--ease-out);
+}
+.switch[aria-checked='true'] {
+  background: var(--pill-bg);
+  border-color: var(--pill-bg);
+}
+.switch[aria-checked='true']::after {
+  background: var(--pill-fg);
+  transform: translateX(20px);
+}
+.range {
+  width: 140px;
+  accent-color: var(--board-fg);
+}
+.h2 {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 24px 0 8px;
+  color: var(--muted);
+}
+.meter {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--line);
+  overflow: hidden;
+  margin-top: 8px;
+}
+.meter > i {
+  display: block;
+  height: 100%;
+  background: currentColor;
+}
+.qr {
+  display: grid;
+  grid-template-columns: 1fr 2fr auto;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.qr .field {
+  padding: 10px 12px;
+  font-size: 14px;
+}
+.iconBtn {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border-strong);
+}
+/* Models: the recommended pick reads first (solid), other fits stay outlined. */
+.pillOn {
+  composes: pill;
+  background: var(--pill-bg);
+  color: var(--pill-fg);
+  border-color: var(--pill-bg);
+}
+.ghost:disabled {
+  opacity: 0.4;
+}

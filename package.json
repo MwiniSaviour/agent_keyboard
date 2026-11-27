@@ -1,0 +1,20 @@
+{
+  "name": "agent-keyboard",
+  "private": true,
+  "description": "Offline-first AI agent keyboard (Capacitor + Next.js). See docs/SPEC.md.",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "dev": "npm run dev -w @ak/shell",
+    "build": "npm run build -w @ak/shell",
+    "preview": "npm run preview -w @ak/shell",
+    "test": "npm run test --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "check": "npm run typecheck && npm run test && npm run build"
+  }
+}
