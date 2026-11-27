@@ -11,6 +11,7 @@ import android.content.pm.ServiceInfo
 import android.os.Binder
 import android.os.Build
 import android.os.IBinder
+import android.os.ParcelFileDescriptor
 import android.os.Process
 import com.agentkeyboard.app.AkLog
 import com.agentkeyboard.app.MainActivity
@@ -20,8 +21,9 @@ import com.agentkeyboard.core.protocol.PROTOCOL_VERSION
 
 /**
  * Binder front of `:agent` (ADR-0003). It is deliberately thin: it checks the caller, hops every
- * call onto [AgentHub]'s thread, and owns the specialUse foreground state while a run is in flight
- * (SPEC §17). All behaviour lives in `core.agent.AgentRuntime`.
+ * call onto [AgentHub]'s thread, and owns the foreground state: `specialUse` while a run is in flight
+ * (SPEC §17), `dataSync` while a user-started model download/import runs (ADR-0011), both when both.
+ * All behaviour lives in `core.agent.AgentRuntime` and `core.models.ModelService`.
  */
 class AgentService : Service() {
 
@@ -46,6 +48,14 @@ class AgentService : Service() {
 
         override fun appendAudit(auditJson: String) {
             if (trusted()) AgentHub.post { it.appendAudit(auditJson) }
+        }
+
+        override fun importModel(file: ParcelFileDescriptor, name: String, sizeBytes: Long) {
+            if (!trusted()) {
+                runCatching { file.close() }
+                return
+            }
+            AgentHub.importModel(file, name, sizeBytes)
         }
 
         override fun register(callback: IAgentCallback, origin: String) {
@@ -74,17 +84,31 @@ class AgentService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         // Only ever started by startForegroundCompat(): promote within the 10 s window, every time.
         if (intent?.action == ACTION_FOREGROUND) {
-            setForeground(true) // mandatory after startForegroundService, even if the run already ended
-            // F15: the run may have finished while this start was in flight; its "not busy" found no
+            // Mandatory after startForegroundService, even if the work already ended.
+            setForeground(AgentHub.work.takeIf { it != 0 } ?: AgentHub.WORK_RUN)
+            // F15: the work may have finished while this start was in flight; its "idle" found no
             // service to demote. Demote now instead of staying foreground until the next run.
-            if (!AgentHub.busy) setForeground(false)
+            if (AgentHub.work == 0) setForeground(0)
         }
         return START_NOT_STICKY // a killed draft is abandoned, never silently resumed
     }
 
+    /**
+     * Android 15+: dataSync has a daily time budget. Drop that type now (the platform requires it
+     * within seconds) and hold the queue; partial files stay and resume from the Models screen.
+     */
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        if (fgsType and ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC != 0) {
+            AkLog.w("dataSync time limit reached; pausing model transfers")
+            setForeground(current and AgentHub.WORK_TRANSFER.inv())
+            AgentHub.transfersTimedOut()
+        }
+    }
+
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
-        if (level >= TRIM_MEMORY_BACKGROUND) AgentHub.onTrimMemory() // Part 3: also unloads the model (§12.2)
+        // Drops background inference and unloads the resident model (SPEC §12.2).
+        if (level >= TRIM_MEMORY_BACKGROUND) AgentHub.onTrimMemory()
     }
 
     override fun onDestroy() {
@@ -92,27 +116,32 @@ class AgentService : Service() {
         super.onDestroy()
     }
 
-    private var isForeground = false
-    private val fg: (Boolean) -> Unit = ::setForeground
+    /** [AgentHub.WORK_RUN] / [AgentHub.WORK_TRANSFER] bits this service is currently foreground for. */
+    private var current = 0
+    private val fg: (Int) -> Unit = ::setForeground
 
-    private fun setForeground(on: Boolean) {
-        if (on == isForeground) return
-        if (on) {
+    private fun setForeground(work: Int) {
+        if (work == current) return
+        if (work != 0) {
             try {
-                val n = notification(this)
-                if (Build.VERSION.SDK_INT >= 34) startForeground(NOTIFICATION_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+                val n = notification(this, work)
+                if (Build.VERSION.SDK_INT >= 34) startForeground(NOTIFICATION_ID, n, typesOf(work))
                 else startForeground(NOTIFICATION_ID, n)
-                isForeground = true
+                current = work
             } catch (e: IllegalStateException) {
-                // ForegroundServiceStartNotAllowedException (API 31+): the run continues unprotected.
+                // ForegroundServiceStartNotAllowedException (API 31+): the work continues unprotected.
                 AkLog.w("foreground not allowed now", e)
             }
         } else {
             stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf() // drops the "started" state only; stays alive while the IME is bound
-            isForeground = false
+            stopSelf() // drops the "started" state only; stays alive while a client is bound
+            current = 0
         }
     }
+
+    private fun typesOf(work: Int): Int =
+        (if (work and AgentHub.WORK_RUN != 0) ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE else 0) or
+            (if (work and AgentHub.WORK_TRANSFER != 0) ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC else 0)
 
     companion object {
         const val ACTION_FOREGROUND = "com.agentkeyboard.app.agent.FOREGROUND"
@@ -128,7 +157,8 @@ class AgentService : Service() {
             }
         }
 
-        private fun notification(context: Context): Notification {
+        private fun notification(context: Context, work: Int): Notification {
+            val downloading = work == AgentHub.WORK_TRANSFER
             val nm = context.getSystemService(NotificationManager::class.java)
             if (nm.getNotificationChannel(CHANNEL_ACTIVITY) == null) {
                 nm.createNotificationChannel(
@@ -144,8 +174,8 @@ class AgentService : Service() {
             )
             return Notification.Builder(context, CHANNEL_ACTIVITY)
                 .setSmallIcon(android.R.drawable.stat_notify_chat)
-                .setContentTitle(context.getString(R.string.agent_fgs_title))
-                .setContentText(context.getString(R.string.agent_fgs_text))
+                .setContentTitle(context.getString(if (downloading) R.string.agent_fgs_download_title else R.string.agent_fgs_title))
+                .setContentText(context.getString(if (downloading) R.string.agent_fgs_download_text else R.string.agent_fgs_text))
                 .setContentIntent(open)
                 .setOngoing(true)
                 .setCategory(Notification.CATEGORY_SERVICE)

@@ -35,6 +35,10 @@ object CommandEncoder {
         is Command.SystemOpen -> "system.open"
         is Command.Resize -> "ui.resize"
         is Command.ScreenCapture -> "screen.capture"
+        is Command.ModelsDownload -> "models.download"
+        is Command.ModelsCancel -> "models.cancel"
+        is Command.ModelsDelete -> "models.delete"
+        Command.ModelsImport -> "models.import"
     }
 
     fun encode(c: Command): JsonValue = when (c) {
@@ -61,5 +65,9 @@ object CommandEncoder {
         is Command.SystemOpen -> obj("target" to c.target.wire)
         is Command.Resize -> obj("height" to c.heightDp)
         is Command.ScreenCapture -> obj("enabled" to c.enabled)
+        is Command.ModelsDownload -> obj("ids" to c.ids)
+        is Command.ModelsCancel -> obj("id" to c.id)
+        is Command.ModelsDelete -> obj("id" to c.id)
+        Command.ModelsImport -> obj()
     }
 }

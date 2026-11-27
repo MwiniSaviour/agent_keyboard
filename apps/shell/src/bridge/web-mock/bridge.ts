@@ -26,6 +26,7 @@ import { fullText } from '@ak/keyboard-engine';
 import { agentRepository, agentsStore } from '@/agents/repository';
 import { GENERAL_AGENT_ID } from '@/agents/defaults';
 import { MockHost } from './host';
+import { MockModels } from './models';
 import { checkInbound, checkOutbound, RateLimiter } from './policy';
 import { fixGrammar, runSkill } from './runtime';
 
@@ -74,6 +75,8 @@ export class WebMockBridge implements NativeBridge {
   };
   private unsubHost: () => void;
   private unsubAgents: () => void;
+  /** Simulated model packs (ADR-0011). Outputs stay templated whether or not a pack is "installed". */
+  private models = new MockModels('M', (s) => this.emit('models.changed', s));
 
   constructor() {
     let agentsRef = agentsStore.get().agents;
@@ -202,6 +205,7 @@ export class WebMockBridge implements NativeBridge {
       case 'settings.set': {
         const { key, value } = p as ShellCommands['settings.set'];
         if (key === 'autonomy.consent') this.setConsent(value === true);
+        if (key === 'models.wifiOnly' && typeof value === 'boolean') this.models.setWifiOnly(value);
         return;
       }
       case 'ui.resize':
@@ -215,6 +219,14 @@ export class WebMockBridge implements NativeBridge {
       }
       case 'agents.delete':
         return agentRepository.remove((p as ShellCommands['agents.delete']).id);
+      case 'models.download':
+        return this.models.download((p as ShellCommands['models.download']).ids);
+      case 'models.cancel':
+        return this.models.cancel((p as ShellCommands['models.cancel']).id);
+      case 'models.delete':
+        return this.models.delete((p as ShellCommands['models.delete']).id);
+      case 'models.import':
+        return; // the browser has no file-picker → :agent path; the playground build is `download`
     }
   }
 
@@ -252,9 +264,11 @@ export class WebMockBridge implements NativeBridge {
           flavor: 'web',
           tier: 'M',
           totalRamMb: 0,
-          modelsInstalled: false,
+          modelsInstalled: this.models.hasTextModel(),
           autonomyConsent: this.consent,
         } as ShellRequests[T]['res'];
+      case 'models.status':
+        return this.models.status() as ShellRequests[T]['res'];
     }
     throw new Error(`unknown request ${String(type)}`);
   }
@@ -265,6 +279,7 @@ export class WebMockBridge implements NativeBridge {
     this.unsubAgents();
     this.handlers.clear();
     this.voiceStop(false);
+    this.models.dispose();
   }
 
   // ───────────── Simulated native internals ─────────────
@@ -423,6 +438,7 @@ export class WebMockBridge implements NativeBridge {
   private async run(req: AgentRunRequest): Promise<void> {
     const state = { cancelled: false };
     this.runs.set(req.runId, state);
+    this.models.touch();
     const t0 = performance.now();
     const agent = agentRepository.get(req.agentId) ?? agentRepository.get(GENERAL_AGENT_ID)!;
     const editor = this.host.editor();

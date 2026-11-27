@@ -16,4 +16,6 @@ ext {
     // Agent Keyboard native host (Part 2)
     sqlcipherVersion = '4.20.0'
     androidxSqliteVersion = '2.7.0'
+    // Part 3: the only generative runtime (ADR-0004/0011). Bump with tools/app-stubs/com/google/ai/edge/litertlm.
+    litertlmVersion = '0.20.0'
 }

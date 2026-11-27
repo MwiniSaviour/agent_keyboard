@@ -28,7 +28,11 @@
       "agents.delete",
       "system.open",
       "ui.resize",
-      "screen.capture"
+      "screen.capture",
+      "models.download",
+      "models.cancel",
+      "models.delete",
+      "models.import"
     ],
     "requests": [
       "hello",
@@ -36,7 +40,8 @@
       "context.scan",
       "clipboard.list",
       "agents.list",
-      "system.status"
+      "system.status",
+      "models.status"
     ],
     "events": [
       "editor.start",
@@ -54,7 +59,8 @@
       "voice.end",
       "theme.update",
       "agents.changed",
-      "screen.state"
+      "screen.state",
+      "models.changed"
     ],
     "errorCodes": [
       "unknown_type",
@@ -187,7 +193,20 @@
     },
     "screen.capture": {
       "enabled": true
-    }
+    },
+    "models.download": {
+      "ids": [
+        "gemma-3-1b-it-int4",
+        "embeddinggemma-300m"
+      ]
+    },
+    "models.cancel": {
+      "id": "gemma-3-1b-it-int4"
+    },
+    "models.delete": {
+      "id": "gemma-3-1b-it-int4"
+    },
+    "models.import": {}
   },
   "requests": {
     "hello": {
@@ -393,6 +412,46 @@
         "modelsInstalled": false,
         "autonomyConsent": false
       }
+    },
+    "models.status": {
+      "req": {},
+      "res": {
+        "tier": "S",
+        "source": "download",
+        "catalog": "ready",
+        "packs": [
+          {
+            "id": "gemma-3-1b-it-int4",
+            "name": "Gemma 3 1B",
+            "kind": "llm",
+            "role": "Replies, rewriting and explanations",
+            "sizeBytes": 584417280,
+            "license": "Gemma Terms of Use",
+            "licenseUrl": "https://ai.google.dev/gemma/terms",
+            "core": true,
+            "state": "downloading",
+            "receivedBytes": 125829120
+          },
+          {
+            "id": "embeddinggemma-300m",
+            "name": "EmbeddingGemma 300M",
+            "kind": "embedding",
+            "role": "Memory and agent knowledge search",
+            "sizeBytes": 179306496,
+            "license": "Gemma Terms of Use",
+            "core": false,
+            "state": "paused",
+            "receivedBytes": 0,
+            "detail": "Waiting for Wi-Fi"
+          }
+        ],
+        "freeBytes": 21474836480,
+        "wifiOnly": true,
+        "resident": {
+          "id": "gemma-3-1b-it-int4",
+          "backend": "cpu"
+        }
+      }
     }
   },
   "events": {
@@ -476,7 +535,9 @@
     "voice.level": {
       "rms": 0.25
     },
-    "voice.end": {},
+    "voice.end": {
+      "detail": "Microphone permission is off"
+    },
     "theme.update": {
       "mode": "system",
       "systemDark": true
@@ -485,6 +546,43 @@
     "screen.state": {
       "status": "paused",
       "detail": "Paused in protected fields"
+    },
+    "models.changed": {
+      "tier": "S",
+      "source": "download",
+      "catalog": "ready",
+      "packs": [
+        {
+          "id": "gemma-3-1b-it-int4",
+          "name": "Gemma 3 1B",
+          "kind": "llm",
+          "role": "Replies, rewriting and explanations",
+          "sizeBytes": 584417280,
+          "license": "Gemma Terms of Use",
+          "licenseUrl": "https://ai.google.dev/gemma/terms",
+          "core": true,
+          "state": "downloading",
+          "receivedBytes": 125829120
+        },
+        {
+          "id": "embeddinggemma-300m",
+          "name": "EmbeddingGemma 300M",
+          "kind": "embedding",
+          "role": "Memory and agent knowledge search",
+          "sizeBytes": 179306496,
+          "license": "Gemma Terms of Use",
+          "core": false,
+          "state": "paused",
+          "receivedBytes": 0,
+          "detail": "Waiting for Wi-Fi"
+        }
+      ],
+      "freeBytes": 21474836480,
+      "wifiOnly": true,
+      "resident": {
+        "id": "gemma-3-1b-it-int4",
+        "backend": "cpu"
+      }
     }
   },
   "rejected": [
@@ -562,6 +660,21 @@
       "name": "bad scan direction",
       "raw": "{\"v\":1,\"id\":\"s:14\",\"type\":\"context.scan\",\"ts\":1,\"payload\":{\"direction\":\"left\",\"pages\":2}}",
       "code": "bad_payload"
+    },
+    {
+      "name": "too many downloads",
+      "raw": "{\"v\":1,\"id\":\"s:16\",\"type\":\"models.download\",\"ts\":1,\"payload\":{\"ids\":[\"m0\",\"m1\",\"m2\",\"m3\",\"m4\",\"m5\",\"m6\",\"m7\",\"m8\",\"m9\",\"m10\",\"m11\",\"m12\",\"m13\",\"m14\",\"m15\",\"m16\"]}}",
+      "code": "dropped"
+    },
+    {
+      "name": "bad model id",
+      "raw": "{\"v\":1,\"id\":\"s:17\",\"type\":\"models.delete\",\"ts\":1,\"payload\":{\"id\":\"../../databases/ak.db\"}}",
+      "code": "dropped"
+    },
+    {
+      "name": "unknown models request",
+      "raw": "{\"v\":1,\"id\":\"s:18\",\"type\":\"models.explode\",\"ts\":1,\"payload\":{}}",
+      "code": "unknown_type"
     },
     {
       "name": "capture without flag",

@@ -6,8 +6,16 @@ import android.os.Looper
 import android.os.Process
 import android.os.RemoteCallbackList
 import android.os.RemoteException
+import android.os.ParcelFileDescriptor
 import com.agentkeyboard.app.Ak
 import com.agentkeyboard.app.AkLog
+import com.agentkeyboard.app.BuildConfig
+import com.agentkeyboard.app.models.AndroidDevice
+import com.agentkeyboard.app.models.AndroidHttp
+import com.agentkeyboard.app.models.AndroidModelFiles
+import com.agentkeyboard.app.models.AndroidNetwork
+import com.agentkeyboard.app.models.LiteRtLmRuntime
+import com.agentkeyboard.app.models.PrefsProbeStore
 import com.agentkeyboard.app.notify.AkNotificationListener
 import com.agentkeyboard.app.storage.AkDatabase
 import com.agentkeyboard.app.storage.SqlAgentStore
@@ -17,7 +25,12 @@ import com.agentkeyboard.app.storage.SqlSettingsStore
 import com.agentkeyboard.app.system.SystemSettings
 import com.agentkeyboard.core.agent.AgentOutput
 import com.agentkeyboard.core.agent.AgentRuntime
-import com.agentkeyboard.core.agent.NoModelEngine
+import com.agentkeyboard.core.inference.LocalInferenceEngine
+import com.agentkeyboard.core.inference.ModelManager
+import com.agentkeyboard.core.models.ManifestException
+import com.agentkeyboard.core.models.ManifestVerifier
+import com.agentkeyboard.core.models.ModelService
+import java.io.File
 import java.util.concurrent.Executor
 import java.util.concurrent.Executors
 
@@ -26,8 +39,9 @@ import java.util.concurrent.Executors
  * lifecycle, because `AgentService` (bound by the IME) and `AkNotificationListener` (bound by the
  * system) live and die separately but must share one conversation cache and one database.
  *
- * Threading: all runtime access happens on [handler]'s thread (`ak-agent`). Inference runs on a
- * single background-priority thread, so at most one model works at a time (ADR-0004).
+ * Threading: all runtime and model-service access happens on [handler]'s thread (`ak-agent`).
+ * Inference runs on a single background-priority thread, so at most one model works at a time
+ * (ADR-0004); downloads and imports run on their own I/O thread (ADR-0011).
  */
 object AgentHub {
     private val thread = HandlerThread("ak-agent", Process.THREAD_PRIORITY_DEFAULT).apply { start() }
@@ -38,17 +52,27 @@ object AgentHub {
         Thread({ Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND); r.run() }, "ak-engine")
     }
 
+    private val ioThread = Executors.newSingleThreadExecutor { r ->
+        Thread({ Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND); r.run() }, "ak-models-io")
+    }
+
     val callbacks = RemoteCallbackList<IAgentCallback>()
 
-    /** Set by `AgentService` while it exists; receives foreground on/off on the main thread. */
-    @Volatile var foreground: ((Boolean) -> Unit)? = null
+    const val WORK_RUN = 1
+    const val WORK_TRANSFER = 2
 
-    /** Latest busy state (main thread): lets a late `onStartCommand` demote a run that already ended. */
-    @Volatile var busy: Boolean = false
+    /** Set by `AgentService` while it exists; receives the foreground work bits on the main thread. */
+    @Volatile var foreground: ((Int) -> Unit)? = null
+
+    /** Latest work bits (main thread): lets a late `onStartCommand` demote work that already ended. */
+    @Volatile var work: Int = 0
         private set
 
     private var runtime: AgentRuntime? = null // ak-agent thread only
+    private var models: ModelService? = null // ak-agent thread only
+    private var manager: ModelManager? = null
     private var speech: PlatformSpeech? = null
+    private val idleCheck = Runnable { manager?.unloadIfIdle() }
 
     /** Runs [block] on the agent thread with a started runtime. Never blocks the caller. */
     fun post(block: (AgentRuntime) -> Unit) {
@@ -69,13 +93,72 @@ object AgentHub {
         }
     }
 
-    fun onTrimMemory() = handler.post { speech?.shutdown() }
+    /** Memory pressure: release TTS, drop background inference, unload the model (SPEC §12.2). */
+    fun onTrimMemory() = handler.post {
+        speech?.shutdown()
+        runtime?.onTrimMemory()
+    }
+
+    /** From the companion's file picker (offline flavor). Closes [file] if the import can't start. */
+    fun importModel(file: ParcelFileDescriptor, name: String, size: Long) = post {
+        val m = models
+        val accepted = m != null && m.import(name, size) { ParcelFileDescriptor.AutoCloseInputStream(file) }
+        if (!accepted) runCatching { file.close() }
+    }
+
+    /** dataSync budget exhausted (Android 15+): hold transfers until the Models screen is opened again. */
+    fun transfersTimedOut() = post {
+        models?.suspend("Paused by Android’s background download limit. Open Models to continue.")
+    }
+
+    private fun setWork(bit: Int, on: Boolean) = main.post {
+        val next = if (on) work or bit else work and bit.inv()
+        if (next == work) return@post
+        work = next
+        val service = foreground
+        when {
+            service != null -> service(next)
+            on -> AgentService.startForegroundCompat(Ak.app) // its onStartCommand promotes it
+        }
+    }
 
     private fun create(): AgentRuntime {
         val t0 = System.nanoTime()
         val ctx = Ak.app
         val db = AkDatabase.open(ctx).writableDatabase
         val sp = PlatformSpeech(ctx, handler).also { speech = it }
+        val settings = SqlSettingsStore(db)
+        var rt: AgentRuntime? = null
+        val modelManager = ModelManager(
+            runtime = LiteRtLmRuntime(File(ctx.cacheDir, "litertlm"), ctx.applicationInfo.nativeLibraryDir),
+            probes = PrefsProbeStore(ctx),
+            device = AndroidDevice(ctx),
+            appVersion = BuildConfig.VERSION_CODE,
+            log = AkLog::d,
+        ).also { manager = it }
+        val online = BuildConfig.ONLINE
+        lateinit var service: ModelService
+        service = ModelService(
+            tier = Ak.tier,
+            appVersion = BuildConfig.VERSION_CODE,
+            source = if (online) ModelService.SOURCE_DOWNLOAD else ModelService.SOURCE_IMPORT,
+            manifestUrl = BuildConfig.MODEL_MANIFEST_URL.ifBlank { null },
+            verifier = verifier(BuildConfig.MODEL_MANIFEST_KEYS),
+            files = AndroidModelFiles(ctx),
+            http = if (online) AndroidHttp() else null,
+            settings = settings,
+            network = AndroidNetwork(ctx) { handler.post { service.networkChanged() } },
+            io = ioThread,
+            serial = serial,
+            onChanged = { status -> rt?.modelsChanged(status) },
+            onTransfer = { on -> setWork(WORK_TRANSFER, on) },
+            onRemoved = { id -> modelManager.evict(id) },
+            residency = { modelManager.resident },
+            log = AkLog::d,
+        ).also {
+            it.start()
+            models = it
+        }
         val output = object : AgentOutput {
             override fun envelope(raw: String, to: String?) = broadcast(to) { it.onEnvelope(raw) }
             override fun inbound(packageName: String, conversationKey: String, messageJson: String, remoteInputAvailable: Boolean) =
@@ -87,30 +170,47 @@ object AgentHub {
             agents = SqlAgentStore(db),
             clipboard = SqlClipboardStore(db),
             audit = SqlAuditStore(db),
-            settings = SqlSettingsStore(db),
+            settings = settings,
             speech = sp,
-            engine = NoModelEngine, // Part 3: LiteRT-LM engine chosen by Ak.tier
+            engine = LocalInferenceEngine(service, modelManager),
             output = output,
-            status = { SystemSettings.status(ctx, modelsInstalled = false) },
+            status = { SystemSettings.status(ctx, modelsInstalled = service.hasTextModel()) },
             engineExecutor = engineThread,
             serial = serial,
             onBusyChanged = { busy ->
-                main.post {
-                    this.busy = busy
-                    val service = foreground
-                    when {
-                        service != null -> service(busy)
-                        busy -> AgentService.startForegroundCompat(ctx) // its onStartCommand promotes it
-                    }
-                }
+                setWork(WORK_RUN, busy)
+                // Unload an idle model after its timeout (Tier S keeps RAM for the foreground app).
+                handler.removeCallbacks(idleCheck)
+                if (!busy) handler.postDelayed(idleCheck, IDLE_UNLOAD_MS + 1_000)
             },
             log = AkLog::d,
             replies = { key, text -> AkNotificationListener.replyVia(ctx, key, text) },
+            models = service,
+            onTrim = { modelManager.trim() },
         ).also {
+            rt = it
             it.start()
             AkLog.i("agent runtime ready in ${(System.nanoTime() - t0) / 1_000_000} ms")
         }
     }
+
+    /**
+     * `ak.modelManifestKeys` = `keyId:base64Spki[,keyId:base64Spki…]` (ADR-0011 key rotation). A bad
+     * value disables the catalog ("unconfigured") instead of taking the whole runtime down.
+     */
+    private fun verifier(raw: String): ManifestVerifier = try {
+        ManifestVerifier(
+            raw.split(',').mapNotNull { pair ->
+                val i = pair.indexOf(':')
+                if (i <= 0) null else pair.substring(0, i).trim() to pair.substring(i + 1).trim()
+            }.toMap(),
+        )
+    } catch (e: ManifestException) {
+        AkLog.w("model manifest key misconfigured")
+        ManifestVerifier(emptyMap())
+    }
+
+    private const val IDLE_UNLOAD_MS = 5 * 60_000L
 
     /**
      * Callbacks are `oneway`, so a slow or dead IME can never stall this thread. [to] = one client

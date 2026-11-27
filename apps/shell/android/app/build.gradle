@@ -11,6 +11,12 @@ android {
         versionCode 1
         versionName "0.2.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        // Signed model catalog (SPEC §12.6, ADR-0011). Set in ~/.gradle/gradle.properties or with -P:
+        //   ak.modelManifestUrl  = https URL of the signed models.json
+        //   ak.modelManifestKeys = keyId:base64Spki[,keyId:base64Spki]  (scripts/models/manifest.mjs keygen)
+        // Unset → the Models screen reports "no catalog configured" and nothing is downloaded.
+        buildConfigField "String", "MODEL_MANIFEST_URL", "\"${project.findProperty('ak.modelManifestUrl') ?: ''}\""
+        buildConfigField "String", "MODEL_MANIFEST_KEYS", "\"${project.findProperty('ak.modelManifestKeys') ?: ''}\""
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
              // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
@@ -36,10 +42,15 @@ android {
             applicationIdSuffix ".full"
             buildConfigField "boolean", "A11Y_ACTIONS", "true"
         }
-        online { dimension "network" }
+        online {
+            dimension "network"
+            buildConfigField "boolean", "ONLINE", "true"
+        }
         offline {
             dimension "network"
             applicationIdSuffix ".offline"
+            // No INTERNET permission: models and the signed catalog are imported from files.
+            buildConfigField "boolean", "ONLINE", "false"
         }
     }
 
@@ -77,6 +88,7 @@ dependencies {
     implementation "androidx.webkit:webkit:$androidxWebkitVersion"
     implementation "net.zetetic:sqlcipher-android:$sqlcipherVersion@aar"
     implementation "androidx.sqlite:sqlite:$androidxSqliteVersion"
+    implementation "com.google.ai.edge.litertlm:litertlm-android:$litertlmVersion"
     implementation project(':capacitor-android')
     testImplementation "junit:junit:$junitVersion"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"

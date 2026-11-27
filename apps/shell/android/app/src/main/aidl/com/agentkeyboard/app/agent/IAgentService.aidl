@@ -30,6 +30,13 @@ interface IAgentService {
      */
     oneway void remoteReply(String requestId, String conversationKey, String text);
 
+    /**
+     * Companion only: install a model or signed catalog the user picked with the system file picker
+     * (offline flavor, SPEC §17). The descriptor is read-only; :agent verifies the bytes against the
+     * signed catalog before anything is used. Progress arrives as models.changed.
+     */
+    oneway void importModel(in ParcelFileDescriptor file, String name, long sizeBytes);
+
     void register(IAgentCallback callback, String origin);
     void unregister(IAgentCallback callback);
 }

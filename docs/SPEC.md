@@ -450,18 +450,22 @@ the message on Android: **IME** = in-process in `ImeController`, **:agent** = fo
 | S→N | `tts.speak` / `tts.stop` | `{text}` (≤ 4,000 spoken) / `{}` | :agent |
 | S→N | `clipboard.pin` / `clipboard.delete` | `{id, pinned}` / `{id}` | :agent |
 | S→N | `agents.save` / `agents.delete` | `{agent: AgentDefinition}` / `{id}`; General cannot be deleted | :agent |
+| S→N | `models.download` / `models.cancel` / `models.delete` | `{ids}` (≤ 16) / `{id}` / `{id}`. Companion only; the IME ignores them (ADR-0011) | :agent |
+| S→N | `models.import` | `{}`. Companion only: opens the system file picker; the picked file's descriptor goes to :agent over AIDL and is verified against the signed catalog | plugin → :agent |
 | S→N | `settings.set` | `{key, value}`; `autonomy.consent` is also mirrored natively in the IME. `keyboard.theme`, `keyboard.haptics` and `keyboard.keySounds` are IME-local (they drive native haptics/sounds and the fallback keyboard's theme) and are not forwarded to `:agent` | IME + :agent |
 | S↔N | `hello` | `{shellVersion}` → `Capabilities` | IME / plugin |
 | S↔N | `context.snapshot` | `{scope: "field"\|"screen"\|"visual"}` → `ScreenContext` (rung 0/2 in IME, rung 1 from :agent with `chat.match`; `visual` = rung 3 with the newest live frame `{handle, width, height, preview}`, `unavailable` while capture is off) | IME + :agent |
 | S↔N | `context.scan` | `{direction: "up"\|"down", pages: 1–8}` → `ScreenContext` with `scan {pages, complete, restored}`. User-started only (a tap on the keyboard within 3 s in `play`); refused in secure fields and blocked apps | IME |
 | S↔N | `clipboard.list` / `agents.list` / `system.status` | `{}` → `ClipboardItem[]` / `AgentDefinition[]` / `SystemStatus` | :agent |
+| S↔N | `models.status` | `{}` → `ModelsStatus {tier, source, catalog, catalogDetail?, packs, freeBytes, wifiOnly, resident?}`. From the companion it also lets queued downloads start (transfers begin only from the Models screen) | :agent |
 | N→S | `editor.start` / `editor.state` / `editor.finish` | `{field, state}` / `{before, after, selected}` (≤ 1 per frame, ≤ 2,000 chars a side) / `{}` | IME |
 | N→S | `suggestions.update` / `insight.update` | `{items}` / `{insight \| null}` | IME |
 | N→S | `agent.token` / `agent.done` / `agent.error` | `{runId, delta}` / `AgentRunResult` / `{runId, code, message}` | :agent (via IME) |
 | N→S | `autonomy.phase` | `{phase, detail?, consent?}`; `consent` is sent on `hello` and whenever the native consent record changes | IME |
 | N→S | `screen.state` | `{status: "off"\|"starting"\|"live"\|"paused", detail?}` | IME |
-| N→S | `voice.partial` / `voice.final` / `voice.level` / `voice.end` | `{text}` / `{text}` / `{rms}` / `{}` | IME |
+| N→S | `voice.partial` / `voice.final` / `voice.level` / `voice.end` | `{text}` / `{text}` / `{rms}` / `{detail?}` (why it ended early) | IME |
 | N→S | `theme.update` / `agents.changed` | `{mode, systemDark}` / `{}` | IME / :agent |
+| N→S | `models.changed` | `ModelsStatus`, pushed on every state or progress change (progress ≤ 2 per second) | :agent |
 
 Native-internal fields: `context.snapshot.titleHint` and `agent.run` `params.conversationTitle` / `params.screen {text, source}` are written by the IME only. Shell-supplied values are stripped before anything reaches `:agent` (ADR-0010).
 
@@ -690,9 +694,11 @@ Streaming offline STT through sherpa-onnx (or the system recogniser) and system 
 
 ### 12.6 Model distribution
 Signed manifest (`models.json`: id, tier, sha256, size, license, min app version) from CDN →
-resumable download (WorkManager, Wi-Fi default) → sha256 verify → atomic move → registry update.
+resumable download (an in-process installer in a user-started `dataSync` foreground service, Wi-Fi
+default; the offline flavor imports files instead) → sha256 verify → atomic move → registry update.
+The manifest is an ECDSA P-256 signed envelope with rotatable key ids, and URLs are pinned to commits.
 Models are never committed to git or bundled in the APK. Licences are surfaced in-app (Gemma Terms vs
-Apache-2.0 vs LFM).
+Apache-2.0 vs LFM). Implementation and rationale: ADR-0011.
 
 ---
 

@@ -1,6 +1,7 @@
 /**
  * Mock agent runtime: deterministic, context-aware outputs per skill so the shell UX can be built
- * and demoed. Replaced by the on-device Orchestrator + LiteRT-LM in Phase 3 (SPEC §11–§12).
+ * and demoed. On Android the same skills run on the on-device model
+ * (core `skills/` + `inference/`, LiteRT-LM; SPEC §11–§12, ADR-0011).
  * Outputs are templated on purpose: they demonstrate *which context* each skill consumes.
  */
 import type { AgentDefinition, AgentRunRequest, AgentRunResult, RefineStyle, ScreenContext } from '@ak/protocol';
@@ -154,7 +155,7 @@ export function runSkill(input: SkillInput): SkillOutput {
     case 'define': {
       const word = (req.params?.word ?? ctx.text?.selection ?? '').toLowerCase();
       const d = DICTIONARY[word];
-      if (!d) return { text: `“${word}”: the on-device model will define any word (Phase 3).`, actions: ['copy'] };
+      if (!d) return { text: `“${word}”: on your phone, the on-device model defines any word.`, actions: ['copy'] };
       return {
         text: `Explanation: ${d.def}\nExample: ${d.ex}\nSynonyms: ${d.syn.join(', ')}\nAntonyms: ${d.ant.join(', ')}`,
         actions: ['insert', 'copy', 'speak'],

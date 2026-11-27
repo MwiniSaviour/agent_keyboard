@@ -1,7 +1,11 @@
 package com.agentkeyboard.app.companion
 
+import android.app.Activity
+import android.content.Intent
 import android.os.Handler
 import android.os.Looper
+import android.provider.OpenableColumns
+import androidx.activity.result.ActivityResult
 import com.agentkeyboard.app.Ak
 import com.agentkeyboard.app.AkLog
 import com.agentkeyboard.app.agent.AgentClient
@@ -22,6 +26,7 @@ import com.getcapacitor.JSObject
 import com.getcapacitor.Plugin
 import com.getcapacitor.PluginCall
 import com.getcapacitor.PluginMethod
+import com.getcapacitor.annotation.ActivityCallback
 import com.getcapacitor.annotation.CapacitorPlugin
 
 /**
@@ -30,6 +35,8 @@ import com.getcapacitor.annotation.CapacitorPlugin
  * answers only what has no meaning in `:agent`:
  * - `hello`: the companion's capabilities (no editor, no autonomy);
  * - `system.open` / `app.open`: launcher actions that need an Activity context;
+ * - `models.import`: the system file picker (needs an Activity); the picked file's descriptor goes to
+ *   `:agent`, which verifies it against the signed catalog (ADR-0011);
  * - editor/UI commands: dropped (there is no text field to edit here).
  *
  * `:agent` addresses replies to this client's origin; they are still matched to the requests this
@@ -55,7 +62,44 @@ class AgentKitPlugin : Plugin(), AgentClient.Listener {
             call.reject("message is required")
             return
         }
+        if (isModelImport(raw)) {
+            // Resolved by onModelPicked once the user has chosen (or dismissed) a file.
+            val pick = Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*")
+            main.post { startActivityForResult(call, pick, "onModelPicked") }
+            return
+        }
         main.post { handle(raw) }
+        call.resolve()
+    }
+
+    private fun isModelImport(raw: String): Boolean =
+        (EnvelopeCodec.decode(raw) as? Decoded.Ok)?.envelope?.type == "models.import"
+
+    @ActivityCallback
+    private fun onModelPicked(call: PluginCall, result: ActivityResult) {
+        val uri = result.data?.data
+        if (result.resultCode != Activity.RESULT_OK || uri == null) {
+            call.resolve()
+            return
+        }
+        val resolver = context.contentResolver
+        var name = "model"
+        var size = -1L
+        resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, null, null)?.use { c ->
+            if (c.moveToFirst()) {
+                c.getString(0)?.let { name = it }
+                if (!c.isNull(1)) size = c.getLong(1)
+            }
+        }
+        try {
+            resolver.openFileDescriptor(uri, "r")?.use { fd ->
+                if (client?.importModel(fd, name, size) != true) AkLog.w("companion: model import not delivered")
+            }
+        } catch (e: java.io.IOException) {
+            AkLog.w("companion: couldn't open the picked file")
+        } catch (e: SecurityException) {
+            AkLog.w("companion: no access to the picked file")
+        }
         call.resolve()
     }
 

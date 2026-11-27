@@ -74,13 +74,14 @@ object Catalog {
         "voice.start", "voice.stop", "voice.cancel", "tts.speak", "tts.stop",
         "clipboard.paste", "clipboard.pin", "clipboard.delete", "settings.set", "app.open", "form.fill",
         "agents.save", "agents.delete", "system.open", "ui.resize", "screen.capture",
+        "models.download", "models.cancel", "models.delete", "models.import",
     )
-    val REQUESTS: Set<String> = linkedSetOf("hello", "context.snapshot", "context.scan", "clipboard.list", "agents.list", "system.status")
+    val REQUESTS: Set<String> = linkedSetOf("hello", "context.snapshot", "context.scan", "clipboard.list", "agents.list", "system.status", "models.status")
     val EVENTS: Set<String> = linkedSetOf(
         "editor.start", "editor.state", "editor.finish", "suggestions.update", "insight.update",
         "agent.token", "agent.done", "agent.error", "autonomy.phase",
         "voice.partial", "voice.final", "voice.level", "voice.end", "theme.update", "agents.changed",
-        "screen.state",
+        "screen.state", "models.changed",
     )
     val ERROR_CODES: Set<String> = linkedSetOf("unknown_type", "bad_payload", "secure_field", "unavailable", "internal", "version")
 }

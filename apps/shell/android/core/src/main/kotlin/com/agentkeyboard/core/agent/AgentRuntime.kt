@@ -2,6 +2,10 @@ package com.agentkeyboard.core.agent
 
 import com.agentkeyboard.core.context.AppCategories
 import com.agentkeyboard.core.context.ConversationCache
+import com.agentkeyboard.core.inference.InferenceScheduler
+import com.agentkeyboard.core.inference.Priority
+import com.agentkeyboard.core.models.ModelService
+import com.agentkeyboard.core.skills.Skills
 import com.agentkeyboard.core.json.Json
 import com.agentkeyboard.core.json.JsonValue
 import com.agentkeyboard.core.json.arr
@@ -62,13 +66,27 @@ class AgentRuntime(
     private val clock: () -> Long = System::currentTimeMillis,
     val conversations: ConversationCache = ConversationCache(clock = clock),
     private val replies: ReplyChannel? = null,
+    /** Model packs (Part 3). Null in tests that don't exercise them. */
+    private val models: ModelService? = null,
+    /** Memory pressure hook for the host: unload the resident model (SPEC §12.2). */
+    private val onTrim: () -> Unit = {},
 ) {
     private val ids = IdGenerator("a")
     private var focused: FieldContext? = null
+    private val scheduler = InferenceScheduler<PendingRun>()
     private var active: ActiveRun? = null
     private var busy = false
 
-    private class ActiveRun(val request: AgentRunRequest, val startedAt: Long, val origin: String) {
+    /** A scheduled run; restarted as a fresh [ActiveRun] if it is preempted and requeued. */
+    /**
+     * [stream]: only P0/P1 work streams tokens to its client. Lower priorities may be preempted and
+     * restarted from scratch (requeue), so streaming them would show the client the text twice.
+     */
+    private class PendingRun(val request: AgentRunRequest, val origin: String, val job: InferenceJob, val submittedAt: Long, val stream: Boolean)
+
+    private class ActiveRun(val pending: PendingRun) {
+        val request: AgentRunRequest get() = pending.request
+        val origin: String get() = pending.origin
         @Volatile var cancelled = false
         @Volatile var firstTokenAt = -1L
     }
@@ -84,9 +102,19 @@ class AgentRuntime(
     }
 
     fun shutdown() {
-        active?.let { cancel(it, "Assistant service stopped") }
+        apply(scheduler.clear("Assistant service stopped"))
+        models?.shutdown()
         speech.stop()
     }
+
+    /** `onTrimMemory` (SPEC §12.2): drop background inference, then let the host unload the model. */
+    fun onTrimMemory() {
+        apply(scheduler.trim())
+        onTrim()
+    }
+
+    /** `models.changed` to every client (the companion's Models screen and the IME's status). */
+    fun modelsChanged(status: com.agentkeyboard.core.protocol.ModelsStatus) = emit("models.changed", status.toJson())
 
     // ───────────────────────────── IME → :agent ─────────────────────────────
 
@@ -172,7 +200,15 @@ class AgentRuntime(
                 purgeExpiredClips()
                 arr(clipboard.all().map { it.item }.sortedWith(compareByDescending<ClipboardItem> { it.pinned }.thenByDescending { it.at }))
             }
-            Request.SystemStatusRequest -> status().copy(autonomyConsent = autonomyConsented()).toJson()
+            Request.SystemStatusRequest -> status().let { s ->
+                s.copy(autonomyConsent = autonomyConsented(), modelsInstalled = models?.hasTextModel() ?: s.modelsInstalled)
+            }.toJson()
+            Request.ModelsStatusRequest -> {
+                val m = models ?: throw BridgeFailure(ErrorCode.UNAVAILABLE, "Model management isn’t available")
+                // The Models screen is open: refresh a stale catalog, resume an interrupted queue.
+                if (origin == ORIGIN_COMPANION) m.onVisible()
+                m.status().toJson()
+            }
             is Request.ContextSnapshot -> if (origin == ORIGIN_IME) snapshot(request.scope, request.titleHint)
             else throw BridgeFailure(ErrorCode.UNAVAILABLE, "No screen in the companion app")
             is Request.ContextScan -> throw BridgeFailure(ErrorCode.UNAVAILABLE, "Screen scans run in the keyboard")
@@ -208,7 +244,10 @@ class AgentRuntime(
     private fun onCommand(command: Command, origin: String) {
         when (command) {
             is Command.AgentRun -> startRun(command.request, origin)
-            is Command.AgentCancel -> active?.takeIf { it.request.runId == command.runId }?.let { cancel(it, "Cancelled") }
+            is Command.AgentCancel -> apply(scheduler.cancel(command.runId, "Cancelled"))
+            is Command.ModelsDownload -> models?.download(command.ids)
+            is Command.ModelsCancel -> models?.cancel(command.id)
+            is Command.ModelsDelete -> models?.delete(command.id)
             is Command.TtsSpeak -> speech.speak(command.text.take(MAX_TTS_CHARS))
             Command.TtsStop -> speech.stop()
             is Command.ClipboardPin -> clipboard.all().firstOrNull { it.item.id == command.id }?.let {
@@ -258,6 +297,13 @@ class AgentRuntime(
             if (changed) audit.append(AuditRecord(clock(), if (granted) "consent_granted" else "consent_revoked", null, null, null, null, null, null, null))
             return
         }
+        if (key.startsWith("models.")) {
+            // Install records and the queue are owned by ModelService; the shell may only toggle Wi-Fi-only.
+            if (key != ModelService.KEY_WIFI_ONLY || value.bool() == null) return log("settings.set refused for $key")
+            settings.put(key, value)
+            models?.onSetting(key)
+            return
+        }
         settings.put(key, value)
     }
 
@@ -284,52 +330,80 @@ class AgentRuntime(
         // The focused field belongs to the keyboard; a companion run (e.g. testing an agent) isn't typing into it.
         val ime = origin == ORIGIN_IME
         if (ime && focused?.sensitive == true) return runError(request.runId, "policy", "AI is off in secure fields.", origin)
-        // One resident model (ADR-0004): the newest request wins; the user has moved on.
-        // Hand over without releasing foreground: stopping and restarting the FGS between runs is
-        // wasteful and can be refused from the background on Android 12+.
-        active?.let { cancel(it, "Replaced by a newer request", release = false) }
-        val run = ActiveRun(request, clock(), origin)
-        active = run
-        updateBusy()
         val job = InferenceJob(request, agent, if (ime) imeContext(request) else RunContext(null, null))
+        // One resident model (ADR-0004): the scheduler decides what runs now, what waits and what is
+        // replaced (SPEC §11.3: P0 voice > P1 card > P2 autonomy > P3/P4 background).
+        val priority = Skills.of(request).priority
+        val pending = PendingRun(request, origin, job, clock(), stream = priority <= Priority.P1)
+        apply(scheduler.submit(InferenceScheduler.Item(request.runId, priority, pending)))
+    }
+
+    /** Executes scheduler decisions. Busy (and so the FGS) is re-evaluated once, after all of them. */
+    private fun apply(effects: List<InferenceScheduler.Effect<PendingRun>>) {
+        for (e in effects) when (e) {
+            is InferenceScheduler.Effect.Start -> launch(e.item.payload)
+            is InferenceScheduler.Effect.Cancel -> {
+                val run = active
+                if (run != null && run.pending === e.item.payload) {
+                    run.cancelled = true
+                    active = null
+                }
+                // A requeued run will start again; its client only ever hears how it finally ends.
+                if (!e.requeued) runError(e.item.payload.request.runId, "cancelled", e.reason, e.item.payload.origin)
+            }
+        }
+        updateBusy()
+    }
+
+    private fun launch(pending: PendingRun) {
+        val run = ActiveRun(pending)
+        active = run
+        updateBusy() // before execute: a synchronous executor may finish the run inside it
+        val request = pending.request
         engineExecutor.execute {
-            val outcome: Result<InferenceOutput> = try {
-                Result.success(
-                    engine.generate(
-                        job,
-                        onToken = { delta ->
-                            if (!run.cancelled && delta.isNotEmpty()) {
-                                if (run.firstTokenAt < 0) run.firstTokenAt = clock()
-                                serial.execute { if (active === run) emit("agent.token", obj("runId" to request.runId, "delta" to delta), to = run.origin) }
-                            }
-                        },
-                        isCancelled = { run.cancelled },
-                    ),
-                )
-            } catch (f: EngineFailure) {
-                Result.failure(f)
-            } catch (e: Exception) {
-                Result.failure(EngineFailure("internal", "The model failed. Try again."))
+            val outcome: Result<InferenceOutput> = if (run.cancelled) {
+                Result.failure(EngineFailure("cancelled", "Cancelled")) // superseded while waiting for the engine thread
+            } else {
+                try {
+                    Result.success(
+                        engine.generate(
+                            pending.job,
+                            onToken = { delta ->
+                                if (pending.stream && !run.cancelled && delta.isNotEmpty()) {
+                                    if (run.firstTokenAt < 0) run.firstTokenAt = clock()
+                                    serial.execute { if (active === run) emit("agent.token", obj("runId" to request.runId, "delta" to delta), to = run.origin) }
+                                }
+                            },
+                            isCancelled = { run.cancelled },
+                        ),
+                    )
+                } catch (f: EngineFailure) {
+                    Result.failure(f)
+                } catch (e: Exception) {
+                    Result.failure(EngineFailure("internal", "The model failed. Try again."))
+                } catch (e: OutOfMemoryError) {
+                    Result.failure(EngineFailure("unavailable", "Not enough memory for the model right now."))
+                }
             }
             serial.execute { finish(run, outcome) }
         }
     }
 
     private fun finish(run: ActiveRun, outcome: Result<InferenceOutput>) {
-        if (active !== run) return // cancelled or superseded: its error was already emitted
+        if (active !== run) return // cancelled, superseded or requeued: already accounted for
         active = null
-        updateBusy()
         val req = run.request
         outcome.fold(
             onSuccess = { out ->
                 val now = clock()
+                val start = run.pending.submittedAt
                 emit(
                     "agent.done",
                     obj(
                         "runId" to req.runId, "text" to out.text, "data" to out.data,
                         "actions" to actionsFor(req), "apply" to applyModeFor(req)?.let { obj("mode" to it) },
                         "model" to engine.modelId,
-                        "latencyMs" to obj("ttft" to ((if (run.firstTokenAt >= 0) run.firstTokenAt else now) - run.startedAt), "total" to (now - run.startedAt)),
+                        "latencyMs" to obj("ttft" to ((if (run.firstTokenAt >= 0) run.firstTokenAt else now) - start), "total" to (now - start)),
                     ),
                     to = run.origin,
                 )
@@ -339,6 +413,7 @@ class AgentRuntime(
                 runError(req.runId, f.code, f.message ?: "error", run.origin)
             },
         )
+        apply(scheduler.finished(req.runId))
     }
 
     /**
@@ -350,17 +425,12 @@ class AgentRuntime(
         val pkg = focused?.packageName?.takeUnless(PrivacyFilter::isBlockedApp)
         val p = request.params
         val hint = p?.get("conversationTitle").str()
-        val conversation = pkg?.let { conversations.resolve(it, hint) }?.takeIf { it.usableForDrafting }?.conversation
+        // Autopilot names the conversation it is drafting for (its key, from an inbound message of this app).
+        val named = p?.get("conversation").str()?.let(conversations::get)?.takeIf { it.packageName == pkg }
+        val conversation = named ?: pkg?.let { conversations.resolve(it, hint) }?.takeIf { it.usableForDrafting }?.conversation
         val screen = p?.get("screen").objOrNull()
         val text = screen?.get("text").str()?.take(MAX_SCREEN_CHARS)?.let(PrivacyFilter::redact)?.takeIf { pkg != null && it.isNotBlank() }
         return RunContext(focused, conversation, text, text?.let { screen?.get("source").str() })
-    }
-
-    private fun cancel(run: ActiveRun, message: String, release: Boolean = true) {
-        run.cancelled = true
-        if (active === run) active = null
-        if (release) updateBusy()
-        runError(run.request.runId, "cancelled", message, run.origin)
     }
 
     private fun updateBusy() {

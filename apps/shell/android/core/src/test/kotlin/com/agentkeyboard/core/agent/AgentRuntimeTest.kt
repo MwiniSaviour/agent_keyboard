@@ -7,6 +7,11 @@ import com.agentkeyboard.core.json.arrOrNull
 import com.agentkeyboard.core.json.long
 import com.agentkeyboard.core.json.obj
 import com.agentkeyboard.core.json.objOrNull
+import com.agentkeyboard.core.inference.InferenceScheduler
+import com.agentkeyboard.core.models.ManifestFixture
+import com.agentkeyboard.core.models.MemFiles
+import com.agentkeyboard.core.models.FakeNetwork
+import com.agentkeyboard.core.models.ModelService
 import com.agentkeyboard.core.json.str
 import com.agentkeyboard.core.protocol.AgentDefinition
 import com.agentkeyboard.core.protocol.CapsMode
@@ -100,12 +105,16 @@ class AgentRuntimeTest {
     private val direct = Executor { it.run() }
 
     private val sentReplies = mutableListOf<Pair<String, String>>()
-    private fun runtime(engine: InferenceEngine = NoModelEngine, engineExec: Executor = direct) = AgentRuntime(
+    private var trims = 0
+    private fun runtime(engine: InferenceEngine = NoModelEngine, engineExec: Executor = direct, models: ModelService? = null) = AgentRuntime(
         agents, clips, audit, settings, speech, engine, out,
         status = { SystemStatus(true, true, false, false, "play", DeviceTier.S, 4096, false) },
         engineExecutor = engineExec, serial = direct, onBusyChanged = { busy += it }, clock = { now },
         replies = { key, text -> sentReplies += key to text; true },
+        models = models, onTrim = { trims++ },
     ).also { it.start() }
+    private fun runWith(runId: String, skill: String, params: String) =
+        env("agent.run", """{"runId":"$runId","agentId":"$GENERAL_AGENT_ID","skill":"$skill","target":"conversation","params":$params}""")
 
     private var seq = 0
     private fun env(type: String, payload: String = "{}") = """{"v":1,"id":"n:${++seq}","type":"$type","ts":1,"payload":$payload}"""
@@ -407,5 +416,75 @@ class AgentRuntimeTest {
         assertEquals(0.0, c("""{"confidence":7}"""))
         assertEquals(0.0, c("""{}"""))
         assertEquals(0.0, AgentRuntime.confidenceOf(null))
+    }
+
+    // ───────── scheduler (SPEC §11.3) ─────────
+
+    @Test fun aCardPreemptsAnAutonomyDraftWhichRestartsSilentlyAfterwards() {
+        val exec = ManualExecutor()
+        val rt = runtime(ScriptedEngine(listOf("a", "b")), exec)
+        rt.post(runWith("auto", "reply", """{"instruction":"autonomy"}"""))
+        rt.post(run("card"))
+        exec.runAll()
+        assertTrue(out.ofType("agent.error").isEmpty()) // the draft was paused, not failed
+        assertEquals(listOf("card", "auto"), out.ofType("agent.done").map { it.p()["runId"].str() })
+        // Only the card streamed: a restartable P2 run never shows tokens.
+        assertEquals(setOf("card"), out.ofType("agent.token").map { it.p()["runId"].str() }.toSet())
+        assertEquals(listOf(true, false), busy)
+    }
+
+    @Test fun dictationInterruptsAVisibleCardWithAReason() {
+        val exec = ManualExecutor()
+        val rt = runtime(ScriptedEngine(listOf("x")), exec)
+        rt.post(run("card"))
+        rt.post(runWith("voice", "transcribe_refine", """{"dictation":"um hello"}"""))
+        exec.runAll()
+        val err = out.ofType("agent.error").single().p()
+        assertEquals("card", err["runId"].str())
+        assertEquals("cancelled", err["code"].str())
+        assertEquals(InferenceScheduler.INTERRUPTED, err["message"].str())
+        assertEquals(listOf("voice"), out.ofType("agent.done").map { it.p()["runId"].str() })
+    }
+
+    @Test fun memoryPressureDropsBackgroundWorkAndUnloads() {
+        val exec = ManualExecutor()
+        val rt = runtime(ScriptedEngine(listOf("x")), exec)
+        rt.post(runWith("pre", "summarize", """{"instruction":"precompute"}"""))
+        rt.onTrimMemory()
+        exec.runAll()
+        assertEquals(1, trims)
+        assertEquals(InferenceScheduler.TRIMMED, out.ofType("agent.error").single().p()["message"].str())
+        assertTrue(out.ofType("agent.done").isEmpty())
+        assertEquals(listOf(true, false), busy)
+    }
+
+    // ───────── models ─────────
+
+    private fun modelService() = ModelService(
+        tier = DeviceTier.S, appVersion = 1, source = ModelService.SOURCE_DOWNLOAD, manifestUrl = null,
+        verifier = ManifestFixture.verifier, files = MemFiles().apply { manifest = ManifestFixture.envelope }, http = null,
+        settings = settings, network = FakeNetwork(), io = direct, serial = direct, onChanged = {},
+    ).also { it.start() }
+
+    @Test fun modelsStatusIsServedWhenModelManagementExists() {
+        runtime().post(env("models.status"), AgentRuntime.ORIGIN_COMPANION)
+        assertEquals("unavailable", out.ofType("error").single().p()["code"].str())
+        out.envelopes.clear()
+        runtime(models = modelService()).post(env("models.status"), AgentRuntime.ORIGIN_COMPANION)
+        val st = out.ofType("models.status.result").single().p()
+        assertEquals("ready", st["catalog"].str())
+        assertEquals(listOf("gemma-3-1b-it-int4"), st["packs"].arrOrNull()!!.items.map { it.objOrNull()!!["id"].str() })
+    }
+
+    @Test fun theShellCanOnlyToggleWifiOnlyAmongModelSettings() {
+        val rt = runtime(models = modelService())
+        rt.post(env("settings.set", """{"key":"models.installed","value":{"evil":{"sha256":"x"}}}"""))
+        rt.post(env("settings.set", """{"key":"models.queue","value":["x"]}"""))
+        rt.post(env("settings.set", """{"key":"models.wifiOnly","value":"no"}"""))
+        assertNull(settings.map["models.installed"])
+        assertNull(settings.map["models.queue"])
+        assertNull(settings.map["models.wifiOnly"])
+        rt.post(env("settings.set", """{"key":"models.wifiOnly","value":false}"""))
+        assertEquals(false, (settings.map["models.wifiOnly"] as com.agentkeyboard.core.json.JsonBool).value)
     }
 }

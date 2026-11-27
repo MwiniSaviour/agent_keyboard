@@ -160,7 +160,8 @@ class ImeController(private val context: Context, private val ime: ImeHost) : Br
             is Command.AgentRun -> forwardRun(command)
             is Command.AutonomySet -> onAutonomySet(command)
             Command.AutonomyTakeover -> apply(autonomy.dispatch(AutonomyEvent.UserTouched))
-            is Command.VoiceStart -> router.emit("voice.end", obj()) // STT ships in Part 3 (Capabilities.voice=false)
+            // No STT engine yet (Capabilities.voice=false, SPEC §13): end at once and say why.
+            is Command.VoiceStart -> router.emit("voice.end", obj("detail" to VOICE_UNAVAILABLE))
             Command.VoiceStop, Command.VoiceCancel -> router.emit("voice.end", obj())
             is Command.ClipboardPaste -> clipboardCache[command.id]?.let { ime.executor().submit(EditOp.Commit(it)) }
             is Command.AppOpen -> SystemSettings.openCompanion(context, command.route)
@@ -176,6 +177,10 @@ class ImeController(private val context: Context, private val ime: ImeHost) : Br
             // Data/AI traffic owned by :agent.
             is Command.TtsSpeak, Command.TtsStop, is Command.ClipboardPin,
             is Command.ClipboardDelete, is Command.AgentsSave, is Command.AgentsDelete -> forward(command)
+            // Model downloads are managed from the companion's Models screen only: a keyboard must never
+            // start multi-GB transfers (and :agent only starts them while the companion is visible).
+            is Command.ModelsDownload, is Command.ModelsCancel, is Command.ModelsDelete, Command.ModelsImport ->
+                AkLog.d("models.* ignored from the keyboard")
             else -> Unit
         }
     }
@@ -203,6 +208,8 @@ class ImeController(private val context: Context, private val ime: ImeHost) : Br
                 res.arrOrNull()?.items?.forEach { i -> val o = i.objOrNull(); o?.get("id").str()?.let { id -> clipboardCache[id] = o?.get("text").str().orEmpty() } }
             }
             Request.SystemStatusRequest -> forwardRequest("system.status", obj(), reply) {}
+            // Read-only from the keyboard (e.g. "model downloading 40%"); never resumes transfers.
+            Request.ModelsStatusRequest -> forwardRequest("models.status", obj(), reply) {}
         }
     }
 
@@ -672,6 +679,7 @@ class ImeController(private val context: Context, private val ime: ImeHost) : Br
     }
 
     private companion object {
+        const val VOICE_UNAVAILABLE = "Voice typing isn’t available on this build yet."
         const val KEY_CONSENT = "autonomy.consent"
         const val KEY_CONSENT_AT = "autonomy.consent.at"
         const val KEY_CONSENT_SETTING = "autonomy.consent"

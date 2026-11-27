@@ -11,6 +11,7 @@
 import type {
   AgentDefinition,
   ErrorPayload,
+  ModelsStatus,
   NativeEventType,
   NativeEvents,
   ShellCommandType,
@@ -57,6 +58,41 @@ const generalAgent: AgentDefinition = {
   version: 1,
 };
 
+const modelsStatus: ModelsStatus = {
+  tier: 'S',
+  source: 'download',
+  catalog: 'ready',
+  packs: [
+    {
+      id: 'gemma-3-1b-it-int4',
+      name: 'Gemma 3 1B',
+      kind: 'llm',
+      role: 'Replies, rewriting and explanations',
+      sizeBytes: 584417280,
+      license: 'Gemma Terms of Use',
+      licenseUrl: 'https://ai.google.dev/gemma/terms',
+      core: true,
+      state: 'downloading',
+      receivedBytes: 125829120,
+    },
+    {
+      id: 'embeddinggemma-300m',
+      name: 'EmbeddingGemma 300M',
+      kind: 'embedding',
+      role: 'Memory and agent knowledge search',
+      sizeBytes: 179306496,
+      license: 'Gemma Terms of Use',
+      core: false,
+      state: 'paused',
+      receivedBytes: 0,
+      detail: 'Waiting for Wi-Fi',
+    },
+  ],
+  freeBytes: 21474836480,
+  wifiOnly: true,
+  resident: { id: 'gemma-3-1b-it-int4', backend: 'cpu' },
+};
+
 /** One valid payload per shell → native command. */
 export const commands: { [K in ShellCommandType]: ShellCommands[K] } = {
   'text.commit': { text: 'Hello 👋🏽 "quoted" \\ back\nslash' },
@@ -91,6 +127,10 @@ export const commands: { [K in ShellCommandType]: ShellCommands[K] } = {
   'system.open': { target: 'ime_picker' },
   'ui.resize': { height: 268 },
   'screen.capture': { enabled: true },
+  'models.download': { ids: ['gemma-3-1b-it-int4', 'embeddinggemma-300m'] },
+  'models.cancel': { id: 'gemma-3-1b-it-int4' },
+  'models.delete': { id: 'gemma-3-1b-it-int4' },
+  'models.import': {},
 };
 
 /** One valid request and a representative native response per request type. */
@@ -182,6 +222,7 @@ export const requests: { [K in ShellRequestType]: { req: ShellRequests[K]['req']
       autonomyConsent: false,
     },
   },
+  'models.status': { req: {}, res: modelsStatus },
 };
 
 /** One payload per native → shell event. */
@@ -217,10 +258,11 @@ export const events: { [K in NativeEventType]: NativeEvents[K] } = {
   'voice.partial': { text: 'hello' },
   'voice.final': { text: 'Hello there.' },
   'voice.level': { rms: 0.25 },
-  'voice.end': {},
+  'voice.end': { detail: 'Microphone permission is off' },
   'theme.update': { mode: 'system', systemDark: true },
   'agents.changed': {},
   'screen.state': { status: 'paused', detail: 'Paused in protected fields' },
+  'models.changed': modelsStatus,
 };
 
 /** Messages the native side must reject, with the stable error code it reports (for requests) or logs. */
@@ -240,6 +282,9 @@ export const rejected: Array<{ name: string; raw: string; code: ErrorPayload['co
   { name: 'absurd keyboard height', raw: '{"v":1,"id":"s:12","type":"ui.resize","ts":1,"payload":{"height":5000}}', code: 'bad_payload' },
   { name: 'too many scan pages', raw: '{"v":1,"id":"s:13","type":"context.scan","ts":1,"payload":{"direction":"up","pages":40}}', code: 'bad_payload' },
   { name: 'bad scan direction', raw: '{"v":1,"id":"s:14","type":"context.scan","ts":1,"payload":{"direction":"left","pages":2}}', code: 'bad_payload' },
+  { name: 'too many downloads', raw: `{"v":1,"id":"s:16","type":"models.download","ts":1,"payload":{"ids":[${Array.from({ length: 17 }, (_, i) => `"m${i}"`).join(',')}]}}`, code: 'dropped' },
+  { name: 'bad model id', raw: '{"v":1,"id":"s:17","type":"models.delete","ts":1,"payload":{"id":"../../databases/ak.db"}}', code: 'dropped' },
+  { name: 'unknown models request', raw: '{"v":1,"id":"s:18","type":"models.explode","ts":1,"payload":{}}', code: 'unknown_type' },
   { name: 'capture without flag', raw: '{"v":1,"id":"s:15","type":"screen.capture","ts":1,"payload":{}}', code: 'dropped' },
   { name: 'agent with bad ceiling', raw: '{"v":1,"id":"s:11","type":"agents.save","ts":1,"payload":{"agent":{"id":"x","kind":"custom","name":"X","role":"r","tone":"neutral","autonomyCeiling":"yolo","appScope":"all"}}}', code: 'bad_payload' },
 ];

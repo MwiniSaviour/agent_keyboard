@@ -18,4 +18,6 @@ object Fixtures {
     }
 
     fun json(name: String): JsonValue = Json.parse(File(dir, name).readText())
+
+    fun text(name: String): String = File(dir, name).readText()
 }

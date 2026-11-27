@@ -29,7 +29,9 @@ pkg = os.path.join(out, "com/agentkeyboard/app"); os.makedirs(os.path.join(pkg, 
 open(os.path.join(pkg, "BuildConfig.java"), "w").write(
   "package com.agentkeyboard.app;\npublic final class BuildConfig {\n"
   "  public static final boolean DEBUG = false;\n  public static final String APPLICATION_ID = \"com.agentkeyboard.app\";\n"
-  f"  public static final boolean A11Y_ACTIONS = {a11y};\n}}\n")
+  f"  public static final boolean A11Y_ACTIONS = {a11y};\n"
+  "  public static final int VERSION_CODE = 1;\n  public static final boolean ONLINE = true;\n"
+  "  public static final String MODEL_MANIFEST_URL = \"\";\n  public static final String MODEL_MANIFEST_KEYS = \"\";\n}\n")
 kinds = {}
 for f in sorted(os.listdir(os.path.join(app, "main/res/values"))):
   for el in ET.parse(os.path.join(app, "main/res/values", f)).getroot():
@@ -48,7 +50,10 @@ for f in os.listdir(aidl):
   name = f[:-5]; src = open(os.path.join(aidl, f)).read()
   src = re.sub(r"/\*.*?\*/", "", src, flags=re.S); src = re.sub(r"//.*", "", src)
   body = src[src.index("{") + 1: src.rindex("}")]
-  sigs = "".join(f"  {m.strip().replace('oneway ', '')} throws android.os.RemoteException;\n" for m in body.split(";") if m.strip())
+  def sig(m):
+    m = re.sub(r"\b(in|out|inout)\s+", "", m.strip().replace("oneway ", ""))
+    return re.sub(r"\bParcelFileDescriptor\b", "android.os.ParcelFileDescriptor", m)
+  sigs = "".join(f"  {sig(m)} throws android.os.RemoteException;\n" for m in body.split(";") if m.strip())
   open(os.path.join(pkg, "agent", name + ".java"), "w").write(
     f"package com.agentkeyboard.app.agent;\npublic interface {name} extends android.os.IInterface {{\n{sigs}"
     f"  public static abstract class Stub extends android.os.Binder implements {name} {{\n"
@@ -61,7 +66,7 @@ status=0
 for flavor in play full; do
   a11y=false; [ "$flavor" = full ] && a11y=true
   stubs="$OUT/$flavor/stubs"; classes="$OUT/$flavor/classes"
-  rm -rf "$OUT/$flavor"; mkdir -p "$stubs"; cp -r "$HERE/app-stubs/androidx" "$stubs/"
+  rm -rf "$OUT/$flavor"; mkdir -p "$stubs"; cp -r "$HERE/app-stubs/androidx" "$HERE/app-stubs/com" "$stubs/"
   gen_stubs "$stubs" "$a11y"
   mapfile -t KT < <(find "$APP/main/java" "$APP/$flavor/java" -name '*.kt' 2>/dev/null)
   echo "▸ $flavor: compiling ${#KT[@]} Kotlin files"

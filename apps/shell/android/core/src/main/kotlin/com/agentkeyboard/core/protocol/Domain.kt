@@ -345,3 +345,57 @@ data class ScreenContext(
         "ttlMs" to ttlMs,
     )
 }
+
+// ───────────────────────────── Models (SPEC §12, ADR-0011) ─────────────────────────────
+
+/** `ModelPack` in domain.ts. [kind] and [state] are wire strings. */
+data class ModelPack(
+    val id: String,
+    val name: String,
+    val kind: String,
+    val role: String,
+    val sizeBytes: Long,
+    val license: String,
+    val licenseUrl: String?,
+    val core: Boolean,
+    val state: String,
+    val receivedBytes: Long,
+    val detail: String? = null,
+    val updateAvailable: Boolean? = null,
+) : JsonEncodable {
+    override fun toJson(): JsonObj = obj(
+        "id" to id, "name" to name, "kind" to kind, "role" to role, "sizeBytes" to sizeBytes,
+        "license" to license, "licenseUrl" to licenseUrl, "core" to core, "state" to state,
+        "receivedBytes" to receivedBytes, "detail" to detail, "updateAvailable" to updateAvailable,
+    )
+
+    companion object {
+        const val AVAILABLE = "available"
+        const val QUEUED = "queued"
+        const val DOWNLOADING = "downloading"
+        const val PAUSED = "paused"
+        const val INSTALLED = "installed"
+        const val FAILED = "failed"
+    }
+}
+
+data class ResidentModel(val id: String, val backend: String) : JsonEncodable {
+    override fun toJson(): JsonObj = obj("id" to id, "backend" to backend)
+}
+
+/** `ModelsStatus` in domain.ts. */
+data class ModelsStatus(
+    val tier: DeviceTier,
+    val source: String,
+    val catalog: String,
+    val catalogDetail: String?,
+    val packs: List<ModelPack>,
+    val freeBytes: Long,
+    val wifiOnly: Boolean,
+    val resident: ResidentModel?,
+) : JsonEncodable {
+    override fun toJson(): JsonObj = obj(
+        "tier" to tier.wire, "source" to source, "catalog" to catalog, "catalogDetail" to catalogDetail,
+        "packs" to packs, "freeBytes" to freeBytes, "wifiOnly" to wifiOnly, "resident" to resident,
+    )
+}

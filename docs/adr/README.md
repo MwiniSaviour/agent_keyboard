@@ -15,3 +15,4 @@ supersede with a new ADR instead of editing. Reference the ADR in PRs that imple
 | [0008](0008-zero-dependency-hot-path.md) | Zero-dependency, pure-reducer hot path in the shell | Accepted |
 | [0009](0009-native-host-implementation.md) | Native host implementation: pure-Kotlin core, fail-closed gates, single-flight `:agent`, no-SDK verification | Accepted |
 | [0010](0010-live-screen-and-scroll-and-read.md) | Live screen pixels (MediaProjection, in-RAM ring) and user-started scroll-and-read | Accepted |
+| [0011](0011-on-device-model-runtime.md) | On-device model runtime: signed catalog, own resumable installer, scheduler, LiteRT-LM prefix cache | Accepted |

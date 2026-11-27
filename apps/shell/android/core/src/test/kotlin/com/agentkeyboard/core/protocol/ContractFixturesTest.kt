@@ -88,6 +88,23 @@ class ContractFixturesTest {
             scan = ScanInfo(3, complete = true, restored = true), rung = 3, capturedAt = 1764205001000, ttlMs = 30000,
         )
         assertEquals(res("context.scan"), scan.toJson())
+
+        val models = ModelsStatus(
+            tier = DeviceTier.S, source = "download", catalog = "ready", catalogDetail = null,
+            packs = listOf(
+                ModelPack(
+                    "gemma-3-1b-it-int4", "Gemma 3 1B", "llm", "Replies, rewriting and explanations", 584417280, "Gemma Terms of Use",
+                    "https://ai.google.dev/gemma/terms", core = true, state = ModelPack.DOWNLOADING, receivedBytes = 125829120,
+                ),
+                ModelPack(
+                    "embeddinggemma-300m", "EmbeddingGemma 300M", "embedding", "Memory and agent knowledge search", 179306496, "Gemma Terms of Use",
+                    null, core = false, state = ModelPack.PAUSED, receivedBytes = 0, detail = "Waiting for Wi-Fi",
+                ),
+            ),
+            freeBytes = 21474836480, wifiOnly = true, resident = ResidentModel("gemma-3-1b-it-int4", "cpu"),
+        )
+        assertEquals(res("models.status"), models.toJson())
+        assertEquals((contract["events"] as JsonObj)["models.changed"], models.toJson())
     }
 
     @Test fun nativeEventsMatchFixtures() {
@@ -107,7 +124,7 @@ class ContractFixturesTest {
         assertEquals(ev["screen.state"], obj("status" to "paused", "detail" to "Paused in protected fields"))
         assertEquals(ev["agent.error"], obj("runId" to "run_42", "code" to "unavailable", "message" to "AI models are not installed yet."))
         assertEquals(ev["agent.token"], obj("runId" to "run_42", "delta" to "Dear "))
-        assertEquals(ev["voice.end"], obj())
+        assertEquals(ev["voice.end"], obj("detail" to "Microphone permission is off"))
         // Every event name the router can emit is in the TS catalog.
         for (type in ev.fields.keys) assertTrue(type in Catalog.EVENTS)
     }

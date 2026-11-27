@@ -2,6 +2,7 @@ package com.agentkeyboard.core.protocol
 
 import com.agentkeyboard.core.json.JsonObj
 import com.agentkeyboard.core.json.JsonValue
+import com.agentkeyboard.core.json.arrOrNull
 import com.agentkeyboard.core.json.bool
 import com.agentkeyboard.core.json.int
 import com.agentkeyboard.core.json.objOrNull
@@ -38,6 +39,10 @@ sealed interface Command {
     data class SystemOpen(val target: SystemSettingsTarget) : Command
     data class Resize(val heightDp: Int) : Command
     data class ScreenCapture(val enabled: Boolean) : Command
+    data class ModelsDownload(val ids: List<String>) : Command
+    data class ModelsCancel(val id: String) : Command
+    data class ModelsDelete(val id: String) : Command
+    data object ModelsImport : Command
 
     /** Traffic the native side must refuse while a sensitive field is focused (FR-KB-14, SPEC §9). */
     val forbiddenInSecureField: Boolean
@@ -56,6 +61,7 @@ sealed interface Request {
     data object ClipboardList : Request
     data object AgentsList : Request
     data object SystemStatusRequest : Request
+    data object ModelsStatusRequest : Request
 
     val forbiddenInSecureField: Boolean get() = this is ContextSnapshot || this is ContextScan
 }
@@ -77,6 +83,9 @@ private val FEEDBACK_KINDS = setOf("tap", "delete", "space", "return", "mod")
 private val REPLACE_SCOPES = setOf("selection", "field", "word")
 private val SNAPSHOT_SCOPES = setOf("field", "screen", "visual")
 private val SCAN_DIRECTIONS = setOf("up", "down")
+/** Model pack ids (`ModelManifest` ids): also used to derive file names, so the alphabet is strict. */
+val MODEL_ID = Regex("^[a-z0-9][a-z0-9._-]{1,63}$")
+const val MAX_DOWNLOAD_IDS = 16
 private val SETTINGS_KEY = Regex("^[a-zA-Z][a-zA-Z0-9_.]{0,63}$")
 
 object MessageDecoder {
@@ -142,6 +151,13 @@ object MessageDecoder {
             "system.open" -> Command.SystemOpen(wireOf<SystemSettingsTarget>(p["target"].str()) ?: bad("target"))
             "ui.resize" -> Command.Resize(p.reqInt("height", MIN_KEYBOARD_DP..MAX_KEYBOARD_DP))
             "screen.capture" -> Command.ScreenCapture(p.reqBool("enabled"))
+            "models.download" -> Command.ModelsDownload(
+                p["ids"].arrOrNull()?.items?.takeIf { it.size in 1..MAX_DOWNLOAD_IDS }
+                    ?.map { v -> v.str()?.takeIf { MODEL_ID.matches(it) } ?: bad("ids") } ?: bad("ids"),
+            )
+            "models.cancel" -> Command.ModelsCancel(p.reqStr("id", 64).takeIf { MODEL_ID.matches(it) } ?: bad("id"))
+            "models.delete" -> Command.ModelsDelete(p.reqStr("id", 64).takeIf { MODEL_ID.matches(it) } ?: bad("id"))
+            "models.import" -> Command.ModelsImport
             else -> throw BridgeFailure(ErrorCode.UNKNOWN_TYPE, "unknown command '$type'")
         }
     }
@@ -161,6 +177,7 @@ object MessageDecoder {
             "clipboard.list" -> Request.ClipboardList
             "agents.list" -> Request.AgentsList
             "system.status" -> Request.SystemStatusRequest
+            "models.status" -> Request.ModelsStatusRequest
             else -> throw BridgeFailure(ErrorCode.UNKNOWN_TYPE, "unknown request '$type'")
         }
     }

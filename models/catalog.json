@@ -1,0 +1,63 @@
+{
+  "$comment": "Source list for the signed model manifest (SPEC §12.6, ADR-0011). Not read by the app. `node scripts/models/manifest.mjs build` streams every url, measures the exact size and SHA-256, and signs the result. URLs are pinned to Hugging Face commits so the bytes (and so the hash) never change under us. File names, sizes and commits come from Google's AI Edge Gallery allowlist (github.com/google-ai-edge/gallery, model_allowlists/1_0_23.json, the MTP 'updatableModelFiles' commits for Gemma 4). approxBytes is the size that allowlist reports; build replaces it with the measured size.",
+  "schema": 1,
+  "models": [
+    {
+      "id": "gemma-3-1b-it-int4",
+      "kind": "llm",
+      "name": "Gemma 3 1B",
+      "role": "Replies, rewriting, explanations and definitions",
+      "file": "gemma3-1b-it-int4.litertlm",
+      "url": "https://huggingface.co/litert-community/Gemma3-1B-IT/resolve/42d538a932e8d5b12e6b3b455f5572560bd60b2c/gemma3-1b-it-int4.litertlm",
+      "approxBytes": 584417280,
+      "license": "Gemma Terms of Use",
+      "licenseUrl": "https://ai.google.dev/gemma/terms",
+      "tiers": ["S"],
+      "coreFor": ["S"],
+      "capabilities": ["text"],
+      "backends": ["cpu", "gpu"],
+      "runtime": "litertlm",
+      "contextTokens": 1024,
+      "ramMb": 900,
+      "minAppVersion": 1
+    },
+    {
+      "id": "gemma-4-e2b-it",
+      "kind": "llm",
+      "name": "Gemma 4 E2B",
+      "role": "Text, vision and audio in one model",
+      "file": "gemma-4-E2B-it.litertlm",
+      "url": "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/7fa1d78473894f7e736a21d920c3aa80f950c0db/gemma-4-E2B-it.litertlm",
+      "approxBytes": 2588147712,
+      "license": "Apache-2.0",
+      "licenseUrl": "https://www.apache.org/licenses/LICENSE-2.0",
+      "tiers": ["M", "L"],
+      "coreFor": ["M", "L"],
+      "capabilities": ["text", "vision", "audio"],
+      "backends": ["cpu", "gpu"],
+      "runtime": "litertlm",
+      "contextTokens": 4000,
+      "ramMb": 1500,
+      "minAppVersion": 1
+    },
+    {
+      "id": "gemma-4-e4b-it",
+      "kind": "llm",
+      "name": "Gemma 4 E4B",
+      "role": "Highest-quality text and vision (optional)",
+      "file": "gemma-4-E4B-it.litertlm",
+      "url": "https://huggingface.co/litert-community/gemma-4-E4B-it-litert-lm/resolve/9695417f248178c63a9f318c6e0c56cb917cb837/gemma-4-E4B-it.litertlm",
+      "approxBytes": 3659530240,
+      "license": "Apache-2.0",
+      "licenseUrl": "https://www.apache.org/licenses/LICENSE-2.0",
+      "tiers": ["L"],
+      "coreFor": [],
+      "capabilities": ["text", "vision", "audio"],
+      "backends": ["cpu", "gpu"],
+      "runtime": "litertlm",
+      "contextTokens": 4000,
+      "ramMb": 2400,
+      "minAppVersion": 1
+    }
+  ]
+}

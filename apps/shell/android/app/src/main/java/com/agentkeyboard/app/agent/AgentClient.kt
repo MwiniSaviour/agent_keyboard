@@ -7,6 +7,7 @@ import android.content.ServiceConnection
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.ParcelFileDescriptor
 import android.os.RemoteException
 import com.agentkeyboard.app.AkLog
 import com.agentkeyboard.core.protocol.PROTOCOL_VERSION
@@ -118,6 +119,21 @@ class AgentClient(private val context: Context, private val listener: Listener, 
     }
 
     fun appendAudit(auditJson: String) = call { it.appendAudit(auditJson) }
+
+    /**
+     * Companion only. Needs a live binding (a descriptor is never parked in the retry queue); binder
+     * duplicates the fd, so the caller closes its own copy either way. Returns false if not sent.
+     */
+    fun importModel(file: ParcelFileDescriptor, name: String, sizeBytes: Long): Boolean {
+        val s = service ?: return false.also { ensureBound() }
+        return try {
+            s.importModel(file, name, sizeBytes)
+            true
+        } catch (e: RemoteException) {
+            onLost()
+            false
+        }
+    }
 
     private fun call(block: (IAgentService) -> Unit) {
         if (closed) return

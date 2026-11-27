@@ -1,7 +1,7 @@
 /**
- * Browser smoke test for the playground (17 checks: typing, autocap, caps lock, layers, send, physical keys,
+ * Browser smoke test for the playground (21 checks: typing, autocap, caps lock, layers, send, physical keys,
  * lens → reply/define/fill, autonomy consent + auto-reply + PIN escalation, protected fields, long-press,
- * agent creation, mobile layout). Not part of `npm test` — it needs a Chromium:
+ * model packs, agent creation, mobile layout). Not part of `npm test` — it needs a Chromium:
  *
  *   npm i --no-save @sparticuz/chromium puppeteer-core   # or point executablePath at a local Chrome
  *   npm run build -w @ak/shell && npm run preview -w @ak/shell &
@@ -227,6 +227,21 @@ for (const r of ['/agents/', '/agents/new/', '/models/', '/settings/', '/ime/'])
   await sleep(200);
   await page.screenshot({ path: `${shots}/page-${r.replace(/\//g, '_')}.png` });
 }
+// models: download the core pack, pause/resume, licence shown (simulated ModelService, ADR-0011)
+await page.goto(BASE + '/models/', { waitUntil: 'networkidle0' });
+await page.waitForSelector('[data-pack]');
+const lic = await page.evaluate(() => document.querySelector('[data-pack] a[href*="apache.org"]')?.textContent ?? '');
+check('models: licence surfaced', lic === 'Apache-2.0', JSON.stringify(lic));
+await clickText('button', 'Download core pack');
+await page.waitForSelector('[data-pack="gemma-4-e2b-it"][data-state="downloading"] [role="progressbar"]', { timeout: 2000 });
+await clickText('[data-pack="gemma-4-e2b-it"] button', 'Pause');
+const paused = await page.$eval('[data-pack="gemma-4-e2b-it"]', (e) => e.dataset.state);
+await clickText('[data-pack="gemma-4-e2b-it"] button', 'Resume');
+await page.waitForSelector('[data-pack="gemma-4-e2b-it"][data-state="installed"]', { timeout: 15000 }).catch(() => {});
+const installed = await page.$eval('[data-pack="gemma-4-e2b-it"]', (e) => e.dataset.state + ' · ' + e.textContent);
+check('models: download → pause → resume → installed', paused === 'paused' && /^installed · .*Installed/.test(installed), JSON.stringify([paused, installed.slice(0, 60)]));
+await page.screenshot({ path: `${shots}/14-models.png` });
+
 // create an agent
 await page.goto(BASE + '/agents/new/', { waitUntil: 'networkidle0' });
 await page.type('#name', 'Tutor');

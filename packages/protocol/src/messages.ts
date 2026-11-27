@@ -13,6 +13,7 @@ import type {
   FieldContext,
   ImeAction,
   Insight,
+  ModelsStatus,
   ScreenCaptureStatus,
   ScreenContext,
   Suggestion,
@@ -84,6 +85,17 @@ export interface ShellCommands {
    * apps. Progress arrives as `screen.state`.
    */
   'screen.capture': { enabled: boolean };
+  /**
+   * Queue packs for download (online builds) in order; ids come from `models.status`. Progress arrives
+   * as `models.changed`. Downloads resume from where they stopped and are verified before use.
+   */
+  'models.download': { ids: string[] };
+  /** Pause a queued or running download; the partial file is kept so it can resume. */
+  'models.cancel': { id: string };
+  /** Remove an installed pack (or a partial download) from the phone. */
+  'models.delete': { id: string };
+  /** Companion only: open the system file picker to install packs or a signed catalog from files. */
+  'models.import': Empty;
 }
 
 /** Request/response pairs: shell → native → shell. */
@@ -99,6 +111,7 @@ export interface ShellRequests {
   'clipboard.list': { req: Empty; res: ClipboardItem[] };
   'agents.list': { req: Empty; res: AgentDefinition[] };
   'system.status': { req: Empty; res: SystemStatus };
+  'models.status': { req: Empty; res: ModelsStatus };
 }
 
 /** Events: native → shell. */
@@ -116,10 +129,13 @@ export interface NativeEvents {
   'voice.partial': { text: string };
   'voice.final': { text: string };
   'voice.level': { rms: number };
-  'voice.end': Empty;
+  /** Dictation stopped. `detail` is a user-presentable reason when it stopped on an error. */
+  'voice.end': { detail?: string };
   'theme.update': { mode: ThemeMode; systemDark: boolean };
   'agents.changed': Empty;
   'screen.state': { status: ScreenCaptureStatus; detail?: string };
+  /** Pack catalog, download progress or residency changed (throttled to ≤ 2/s while downloading). */
+  'models.changed': ModelsStatus;
 }
 
 /** Error payload for `{type: "error", re}` responses. `code` is stable; `message` is user-presentable. */

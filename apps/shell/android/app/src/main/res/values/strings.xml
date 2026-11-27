@@ -13,9 +13,11 @@
     <string name="a11y_description">When enabled, Agent Keyboard reads the text of the app you are typing in (for example, the last messages of a chat or the labels of a form) only while the keyboard is open, so replies and form-fill suggestions match the context. It never reads password fields, secure screens, or apps on your blocklist, and it never taps or types anything on your behalf. It scrolls the app only when you tap Read earlier messages or Read whole page in the keyboard, then scrolls it back. Everything stays on your device.</string>
 
     <string name="agent_channel_name">Assistant activity</string>
-    <string name="agent_channel_desc">Shown while the assistant is drafting or sending a reply for you.</string>
+    <string name="agent_channel_desc">Shown while the assistant is drafting or sending a reply for you, or installing a model pack.</string>
     <string name="agent_fgs_title">Assistant is working</string>
     <string name="agent_fgs_text">Drafting on your device</string>
+    <string name="agent_fgs_download_title">Installing AI model</string>
+    <string name="agent_fgs_download_text">Downloading and verifying a model pack you chose</string>
     <string name="needs_you_channel_name">Needs you</string>
     <string name="needs_you_title">Autopilot needs you</string>
 

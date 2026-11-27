@@ -302,3 +302,56 @@ export interface Capabilities {
 
 /** Live capture lifecycle (`screen.state`). `paused` carries the reason in `detail`. */
 export type ScreenCaptureStatus = 'off' | 'starting' | 'live' | 'paused';
+
+// ───────────────────────────── Models (SPEC §12, ADR-0011) ─────────────────────────────
+
+export type ModelKind = 'llm' | 'vlm' | 'embedding' | 'stt' | 'tts';
+
+/**
+ * Lifecycle of one pack. `paused` keeps the partial file for resume (cancelled, waiting for Wi-Fi, or
+ * the process stopped); `failed` carries a user-presentable `error`.
+ */
+export type ModelPackState = 'available' | 'queued' | 'downloading' | 'paused' | 'installed' | 'failed';
+
+export interface ModelPack {
+  id: string;
+  name: string;
+  kind: ModelKind;
+  /** What the user gets from it, one line. */
+  role: string;
+  sizeBytes: number;
+  /** SPDX id or licence name (Gemma Terms, Apache-2.0, …), surfaced in-app (SPEC §12.6). */
+  license: string;
+  licenseUrl?: string;
+  /** Part of this tier's core pack. */
+  core: boolean;
+  state: ModelPackState;
+  /** Bytes on disk (partial or complete). */
+  receivedBytes: number;
+  /** Why it is paused or failed. */
+  detail?: string;
+  /** Installed, and the signed catalog now lists a newer build of it. */
+  updateAvailable?: boolean;
+}
+
+/**
+ * `ready`: a verified catalog is cached. `unconfigured`: this build has no catalog URL or signing key.
+ * `unavailable`: no catalog yet and it can't be fetched (offline, or the offline flavor before an
+ * import). `invalid`: the catalog failed signature or schema checks and was ignored.
+ */
+export type ModelCatalogState = 'ready' | 'loading' | 'unconfigured' | 'unavailable' | 'invalid';
+
+export interface ModelsStatus {
+  tier: DeviceTier;
+  /** `download` (online builds) or `import` (the offline flavor installs files picked on the phone). */
+  source: 'download' | 'import';
+  catalog: ModelCatalogState;
+  catalogDetail?: string;
+  packs: ModelPack[];
+  /** Free bytes in app-private storage. */
+  freeBytes: number;
+  /** Downloads wait for an unmetered network (default true). Settings key `models.wifiOnly`. */
+  wifiOnly: boolean;
+  /** The generative model currently in memory and the backend it runs on (one at a time, ADR-0004). */
+  resident?: { id: string; backend: 'npu' | 'gpu' | 'cpu' };
+}
