@@ -30,6 +30,17 @@ export function lastGraphemeLength(text: string): number {
   return code >= 0xdc00 && code <= 0xdfff && text.length >= 2 ? 2 : 1;
 }
 
+/** Length (UTF-16 code units) of the first grapheme cluster in `text`. */
+export function firstGraphemeLength(text: string): number {
+  if (text.length === 0) return 0;
+  const seg = getSegmenter();
+  if (seg) {
+    for (const s of seg.segment(text.slice(0, 32))) return s.segment.length;
+  }
+  const code = text.charCodeAt(0);
+  return code >= 0xd800 && code <= 0xdbff && text.length >= 2 ? 2 : 1;
+}
+
 const WORD_CHAR = /[\p{L}\p{M}\p{N}'’-]/u;
 
 /** The word currently being typed: trailing word characters before the cursor. */

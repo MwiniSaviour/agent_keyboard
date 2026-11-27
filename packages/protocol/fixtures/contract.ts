@@ -90,6 +90,7 @@ export const commands: { [K in ShellCommandType]: ShellCommands[K] } = {
   'agents.delete': { id: 'agent_sales' },
   'system.open': { target: 'ime_picker' },
   'ui.resize': { height: 268 },
+  'screen.capture': { enabled: true },
 };
 
 /** One valid request and a representative native response per request type. */
@@ -104,8 +105,10 @@ export const requests: { [K in ShellRequestType]: { req: ShellRequests[K]['req']
       voice: false,
       tts: true,
       screenContext: true,
-      visualContext: false,
+      visualContext: true,
       autonomy: true,
+      screenCapture: true,
+      screenScan: true,
     },
   },
   'context.snapshot': {
@@ -126,9 +129,33 @@ export const requests: { [K in ShellRequestType]: { req: ShellRequests[K]['req']
         title: 'Kofi',
         participants: ['Kofi'],
         messages: [{ id: 'm1', from: 'them', author: 'Kofi', text: 'Do you deliver to Kumasi?', at: 1764205000000 }],
+        match: 'likely',
       },
       sensitivity: { secureWindow: false, sensitiveField: false, blockedApp: false },
       rung: 1,
+      capturedAt: 1764205001000,
+      ttlMs: 30000,
+    },
+  },
+  'context.scan': {
+    req: { direction: 'up', pages: 3 },
+    res: {
+      app: { package: 'com.android.chrome', label: 'Chrome', category: 'browser' },
+      screenType: 'article',
+      field: {
+        package: 'com.android.chrome',
+        appLabel: 'Chrome',
+        kind: 'text',
+        imeAction: 'go',
+        capsMode: 'none',
+        hint: 'Search',
+        sensitive: false,
+      },
+      text: { title: 'Kumasi weather', body: 'Sunny, 31°C\nLight wind from the south-west' },
+      images: [{ handle: 'f_12', width: 432, height: 720 }],
+      sensitivity: { secureWindow: false, sensitiveField: false, blockedApp: false },
+      scan: { pages: 3, complete: true, restored: true },
+      rung: 3,
       capturedAt: 1764205001000,
       ttlMs: 30000,
     },
@@ -152,6 +179,7 @@ export const requests: { [K in ShellRequestType]: { req: ShellRequests[K]['req']
       tier: 'S',
       totalRamMb: 3712,
       modelsInstalled: false,
+      autonomyConsent: false,
     },
   },
 };
@@ -185,13 +213,14 @@ export const events: { [K in NativeEventType]: NativeEvents[K] } = {
     latencyMs: { ttft: 0, total: 0 },
   },
   'agent.error': { runId: 'run_42', code: 'unavailable', message: 'AI models are not installed yet.' },
-  'autonomy.phase': { phase: 'paused', detail: 'Off in secure fields' },
+  'autonomy.phase': { phase: 'paused', detail: 'Off in secure fields', consent: true },
   'voice.partial': { text: 'hello' },
   'voice.final': { text: 'Hello there.' },
   'voice.level': { rms: 0.25 },
   'voice.end': {},
   'theme.update': { mode: 'system', systemDark: true },
   'agents.changed': {},
+  'screen.state': { status: 'paused', detail: 'Paused in protected fields' },
 };
 
 /** Messages the native side must reject, with the stable error code it reports (for requests) or logs. */
@@ -209,5 +238,8 @@ export const rejected: Array<{ name: string; raw: string; code: ErrorPayload['co
   { name: 'bad snapshot scope', raw: '{"v":1,"id":"s:9","type":"context.snapshot","ts":1,"payload":{"scope":"everything"}}', code: 'bad_payload' },
   { name: 'protocol-relative route', raw: '{"v":1,"id":"s:10","type":"app.open","ts":1,"payload":{"route":"//evil.example"}}', code: 'bad_payload' },
   { name: 'absurd keyboard height', raw: '{"v":1,"id":"s:12","type":"ui.resize","ts":1,"payload":{"height":5000}}', code: 'bad_payload' },
+  { name: 'too many scan pages', raw: '{"v":1,"id":"s:13","type":"context.scan","ts":1,"payload":{"direction":"up","pages":40}}', code: 'bad_payload' },
+  { name: 'bad scan direction', raw: '{"v":1,"id":"s:14","type":"context.scan","ts":1,"payload":{"direction":"left","pages":2}}', code: 'bad_payload' },
+  { name: 'capture without flag', raw: '{"v":1,"id":"s:15","type":"screen.capture","ts":1,"payload":{}}', code: 'dropped' },
   { name: 'agent with bad ceiling', raw: '{"v":1,"id":"s:11","type":"agents.save","ts":1,"payload":{"agent":{"id":"x","kind":"custom","name":"X","role":"r","tone":"neutral","autonomyCeiling":"yolo","appScope":"all"}}}', code: 'bad_payload' },
 ];

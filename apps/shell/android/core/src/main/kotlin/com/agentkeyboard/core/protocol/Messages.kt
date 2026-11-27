@@ -37,21 +37,27 @@ sealed interface Command {
     data class AgentsDelete(val id: String) : Command
     data class SystemOpen(val target: SystemSettingsTarget) : Command
     data class Resize(val heightDp: Int) : Command
+    data class ScreenCapture(val enabled: Boolean) : Command
 
     /** Traffic the native side must refuse while a sensitive field is focused (FR-KB-14, SPEC §9). */
     val forbiddenInSecureField: Boolean
         get() = this is AgentRun || this is FormFill || (this is AutonomySet && enabled) ||
-            (this is VoiceStart && refine)
+            (this is VoiceStart && refine) || (this is ScreenCapture && enabled)
 }
 
 sealed interface Request {
     data class Hello(val shellVersion: String) : Request
-    data class ContextSnapshot(val scope: String) : Request
+    /**
+     * [titleHint] is native-internal (IME → `:agent`, never sent by the shell): the conversation title
+     * the IME read from the screen, so rung 1 can pick the right chat instead of the latest one.
+     */
+    data class ContextSnapshot(val scope: String, val titleHint: String? = null) : Request
+    data class ContextScan(val direction: String, val pages: Int) : Request
     data object ClipboardList : Request
     data object AgentsList : Request
     data object SystemStatusRequest : Request
 
-    val forbiddenInSecureField: Boolean get() = this is ContextSnapshot
+    val forbiddenInSecureField: Boolean get() = this is ContextSnapshot || this is ContextScan
 }
 
 /** Max text the shell may push in one command (a full-field replace of a long email). */
@@ -64,9 +70,13 @@ const val MAX_KEYBOARD_DP = 600
 /** Max code points deletable per command; the shell deletes at most a word or a selection at a time. */
 const val MAX_DELETE = 10_000
 
+/** Max screens one `context.scan` may read (ADR-0010): bounded time, memory and scrolling. */
+const val MAX_SCAN_PAGES = 8
+
 private val FEEDBACK_KINDS = setOf("tap", "delete", "space", "return", "mod")
 private val REPLACE_SCOPES = setOf("selection", "field", "word")
 private val SNAPSHOT_SCOPES = setOf("field", "screen", "visual")
+private val SCAN_DIRECTIONS = setOf("up", "down")
 private val SETTINGS_KEY = Regex("^[a-zA-Z][a-zA-Z0-9_.]{0,63}$")
 
 object MessageDecoder {
@@ -131,6 +141,7 @@ object MessageDecoder {
             "agents.delete" -> Command.AgentsDelete(p.reqStr("id", 64))
             "system.open" -> Command.SystemOpen(wireOf<SystemSettingsTarget>(p["target"].str()) ?: bad("target"))
             "ui.resize" -> Command.Resize(p.reqInt("height", MIN_KEYBOARD_DP..MAX_KEYBOARD_DP))
+            "screen.capture" -> Command.ScreenCapture(p.reqBool("enabled"))
             else -> throw BridgeFailure(ErrorCode.UNKNOWN_TYPE, "unknown command '$type'")
         }
     }
@@ -139,7 +150,14 @@ object MessageDecoder {
         val p = payloadObj(payload)
         return when (type) {
             "hello" -> Request.Hello(p.reqStr("shellVersion", 32))
-            "context.snapshot" -> Request.ContextSnapshot(p.reqStr("scope", 16).takeIf { it in SNAPSHOT_SCOPES } ?: bad("scope"))
+            "context.snapshot" -> Request.ContextSnapshot(
+                p.reqStr("scope", 16).takeIf { it in SNAPSHOT_SCOPES } ?: bad("scope"),
+                p["titleHint"]?.let { it.str()?.take(128) ?: bad("titleHint") },
+            )
+            "context.scan" -> Request.ContextScan(
+                p.reqStr("direction", 8).takeIf { it in SCAN_DIRECTIONS } ?: bad("direction"),
+                p.reqInt("pages", 1..MAX_SCAN_PAGES),
+            )
             "clipboard.list" -> Request.ClipboardList
             "agents.list" -> Request.AgentsList
             "system.status" -> Request.SystemStatusRequest

@@ -9,6 +9,7 @@ import type {
   RefineStyle,
   ResultActionId,
   RunTarget,
+  ScreenContext,
   SkillId,
 } from '@ak/protocol';
 import {
@@ -81,9 +82,21 @@ export class KeyboardController {
         if (run?.req.runId === runId && code !== 'cancelled') s.set({ run: { ...run, status: 'error', error: message } });
         else if (code === 'policy') this.toast(message);
       }),
-      b.on('autonomy.phase', ({ phase, detail }) =>
-        s.set((st) => ({ autonomy: { ...st.autonomy, phase, detail: detail ?? null, enabled: phase !== 'off' && st.autonomy.enabled } })),
-      ),
+      b.on('autonomy.phase', ({ phase, detail, consent }) => {
+        // The native consent record is the source of truth (FR-AU-02): a withdrawal in the companion
+        // app must bring the consent sheet back here, not be silently re-granted.
+        if (consent !== undefined) this.rememberConsent(consent);
+        s.set((st) => ({
+          autonomy: {
+            ...st.autonomy,
+            phase,
+            detail: detail ?? null,
+            enabled: phase !== 'off' && st.autonomy.enabled,
+            consent: consent ?? st.autonomy.consent,
+          },
+        }));
+      }),
+      b.on('screen.state', ({ status, detail }) => s.set({ screen: { status, detail: detail ?? null } })),
       b.on('voice.partial', ({ text }) => s.set((st) => ({ voice: { ...st.voice, partial: text } }))),
       b.on('voice.level', ({ rms }) => s.set((st) => ({ voice: { ...st.voice, level: rms } }))),
       b.on('voice.final', ({ text }) => this.insertSmart(text)),
@@ -333,22 +346,47 @@ export class KeyboardController {
     if (s.field?.sensitive) return this.toast('Autopilot is off in protected fields');
     if (!s.autonomy.enabled && !s.autonomy.consent) return this.store.set({ panel: 'consent' });
     const enabled = !s.autonomy.enabled;
-    // The native host keeps its own consent record and refuses to arm without it (FR-AU-02). Only this
-    // consent flow writes it; re-sending on enable keeps native in sync after its data was cleared.
-    if (enabled) this.bridge.send('settings.set', { key: 'autonomy.consent', value: true });
+    // Consent is written only by the consent sheet (grantConsent), never as a side effect of enabling.
     this.store.set({ autonomy: { ...s.autonomy, enabled, phase: enabled ? 'arming' : 'off', detail: null } });
     this.bridge.send('autonomy.set', { enabled, level: s.autonomy.level, agentId: s.activeAgentId });
     this.explainCeiling();
   }
 
   grantConsent(level: AutonomyLevel): void {
-    try {
-      localStorage.setItem(CONSENT_KEY, '1');
-    } catch {
-      /* ignore */
-    }
+    this.rememberConsent(true);
+    // The native host keeps its own consent record and refuses to arm without it (FR-AU-02).
+    this.bridge.send('settings.set', { key: 'autonomy.consent', value: true });
     this.store.set((st) => ({ autonomy: { ...st.autonomy, consent: true, level }, panel: 'none' }));
     this.toggleAutonomy();
+  }
+
+  private rememberConsent(granted: boolean): void {
+    try {
+      if (granted) localStorage.setItem(CONSENT_KEY, '1');
+      else localStorage.removeItem(CONSENT_KEY);
+    } catch {
+      /* storage unavailable */
+    }
+  }
+
+  // ───────────── live screen + scroll-and-read (ADR-0010) ─────────────
+
+  /** Start (system consent dialog, every session) or stop live screen capture. */
+  setScreenCapture(enabled: boolean): void {
+    const s = this.store.get();
+    if (enabled && s.field?.sensitive) return this.toast('Live screen is off in protected fields');
+    if (enabled && !s.capabilities?.screenCapture) return this.toast('Live screen isn’t available here');
+    if (enabled) this.store.set({ screen: { status: 'starting', detail: null } });
+    this.bridge.send('screen.capture', { enabled });
+  }
+
+  /**
+   * "Read whole screen": scroll the app under the keyboard, read up to `pages` screens, scroll back.
+   * Only ever called from a user tap (Play accessibility policy, ADR-0010). Chats read upwards
+   * (older messages), everything else downwards.
+   */
+  scanScreen(screenType: ScreenContext['screenType'], pages = 4): Promise<ScreenContext> {
+    return this.bridge.request('context.scan', { direction: screenType === 'chat' ? 'up' : 'down', pages }, { timeoutMs: 15_000 });
   }
 
   setAutonomyLevel(level: AutonomyLevel): void {

@@ -32,6 +32,18 @@ class AkNotificationListener : NotificationListenerService() {
 
     override fun onNotificationPosted(sbn: StatusBarNotification) = ingest(sbn)
 
+    /**
+     * A dismissed or answered notification takes its reply action with it: the PendingIntent may
+     * still fire, but would answer a thread the user already closed (or the app already cancelled).
+     */
+    override fun onNotificationRemoved(sbn: StatusBarNotification) {
+        val extras = sbn.notification?.extras ?: return
+        val title = (extras.getCharSequence(Notification.EXTRA_CONVERSATION_TITLE) ?: extras.getCharSequence(Notification.EXTRA_TITLE))
+            ?.toString()?.trim()?.take(MAX_TITLE)?.takeIf { it.isNotEmpty() } ?: return
+        val key = ConversationCache.keyOf(sbn.packageName, title)
+        synchronized(replies) { replies.remove(key) }
+    }
+
     private fun ingest(sbn: StatusBarNotification) {
         val pkg = sbn.packageName
         if (pkg == packageName || PrivacyFilter.isBlockedApp(pkg)) return
@@ -43,7 +55,7 @@ class AkNotificationListener : NotificationListenerService() {
 
         val title = (extras.getCharSequence(Notification.EXTRA_CONVERSATION_TITLE) ?: extras.getCharSequence(Notification.EXTRA_TITLE))
             ?.toString()?.trim()?.take(MAX_TITLE)?.takeIf { it.isNotEmpty() } ?: return
-        val messages = if (messaging) messagingStyle(extras) else plain(extras, title, sbn.postTime)
+        val messages = if (messaging) messagingStyle(extras, sbn.postTime) else plain(extras, title, sbn.postTime)
         if (messages.isEmpty()) return
 
         val reply = n.actions?.firstOrNull { a -> a.remoteInputs?.any { it.allowFreeFormInput } == true }
@@ -58,7 +70,7 @@ class AkNotificationListener : NotificationListenerService() {
      * (common in practice) a sender equal to the style's user Person (`EXTRA_MESSAGING_PERSON`). Getting
      * this wrong would make autonomy answer the user's own replies (FR-AU-04/05 loop protection).
      */
-    private fun messagingStyle(extras: Bundle): List<ChatMessage> {
+    private fun messagingStyle(extras: Bundle, postTime: Long): List<ChatMessage> {
         @Suppress("DEPRECATION")
         val raw: Array<Parcelable> = extras.getParcelableArray(Notification.EXTRA_MESSAGES) ?: return emptyList()
         @Suppress("DEPRECATION")
@@ -74,7 +86,7 @@ class AkNotificationListener : NotificationListenerService() {
             val fromMe = sender == null ||
                 (me?.key != null && person?.key == me.key) ||
                 (person?.key == null && myName != null && sender == myName)
-            val at = b.getLong(KEY_TIME)
+            val at = b.getLong(KEY_TIME).takeIf { it > 0 } ?: postTime // some apps omit the per-message time
             ChatMessage("n_${at}_$i", fromMe = fromMe, author = if (fromMe) "Me" else sender.orEmpty(), text = text, at = at)
         }
     }

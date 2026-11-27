@@ -97,9 +97,41 @@ class BridgeRouterTest {
     }
 
     @Test fun emitRejectsTypesOutsideTheCatalog() {
+        router.receive(env("s:1", "hello", """{"shellVersion":"0.1.0"}"""))
+        out.clear()
         router.emit("editor.finish", obj())
         assertEquals("editor.finish", out.single().type)
         assertFailsWith<IllegalArgumentException> { router.emit("editor.explode", obj()) }
+    }
+
+    @Test fun eventsBeforeHelloAreHeldThenDeliveredAfterTheReply() {
+        router.emit("agent.done", obj("runId" to "r1", "text" to "hi"))
+        router.emit("editor.start", obj()) // replayed by the hello handler itself: dropped, not duplicated
+        router.emit("agents.changed", obj())
+        assertTrue(out.isEmpty(), "nothing reaches a page that is not listening yet")
+        router.receive(env("s:1", "hello", """{"shellVersion":"0.1.0"}"""))
+        assertEquals(listOf("hello.result", "agent.done", "agents.changed"), out.map { it.type })
+        out.clear()
+        router.reset() // renderer restart: hold again
+        router.emit("agent.error", obj())
+        assertTrue(out.isEmpty())
+    }
+
+    @Test fun earlyEventBufferIsBounded() {
+        repeat(BridgeRouter.MAX_EARLY + 10) { router.emit("agent.token", obj("runId" to "r", "delta" to "$it")) }
+        router.receive(env("s:1", "hello", """{"shellVersion":"0.1.0"}"""))
+        val tokens = out.filter { it.type == "agent.token" }
+        assertEquals(BridgeRouter.MAX_EARLY, tokens.size)
+        assertEquals("10", tokens.first().payload.objOrNull()!!["delta"].str(), "oldest are dropped first")
+    }
+
+    @Test fun scanAndCaptureAreRefusedInSecureFields() {
+        host.secure = true
+        router.receive(env("s:1", "context.scan", """{"direction":"up","pages":3}"""))
+        router.receive(env("s:2", "screen.capture", """{"enabled":true}"""))
+        router.receive(env("s:3", "screen.capture", """{"enabled":false}""")) // stopping is always allowed
+        assertEquals(listOf<Command>(Command.ScreenCapture(false)), host.commands)
+        assertEquals("secure_field", out.single().payload.objOrNull()!!["code"].str())
     }
 
     @Test fun oversizedMessagesAreDropped() {

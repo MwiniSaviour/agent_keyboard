@@ -12,6 +12,7 @@ import type {
   EditorState,
   FieldContext,
   Insight,
+  ScreenCaptureStatus,
   Suggestion,
   AgentDefinition,
 } from '@ak/protocol';
@@ -54,6 +55,8 @@ export interface ShellState {
   voice: { partial: string; level: number };
   clipboard: ClipboardItem[];
   toast: string | null;
+  /** Live screen capture (`screen.state`, ADR-0010). */
+  screen: { status: ScreenCaptureStatus; detail: string | null };
 }
 
 export const createShellStore = () =>
@@ -73,6 +76,7 @@ export const createShellStore = () =>
     voice: { partial: '', level: 0 },
     clipboard: [],
     toast: null,
+    screen: { status: 'off', detail: null },
   });
 
 export type ShellStore = ReturnType<typeof createShellStore>;

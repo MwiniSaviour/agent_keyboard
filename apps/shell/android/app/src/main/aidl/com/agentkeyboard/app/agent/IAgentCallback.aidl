@@ -7,4 +7,7 @@ interface IAgentCallback {
 
     /** A new message arrived in a conversation (notification listener, already privacy-filtered). */
     oneway void onInbound(String packageName, String conversationKey, String messageJson, boolean remoteInputAvailable);
+
+    /** Outcome of IAgentService.remoteReply. */
+    oneway void onRemoteReplyResult(String requestId, boolean ok);
 }

@@ -52,7 +52,7 @@ class ContractFixturesTest {
         val res = { t: String -> ((contract["requests"] as JsonObj)[t] as JsonObj)["res"] }
         val hello = Capabilities(
             platform = "android-ime", tier = DeviceTier.S, nativeSuggestions = false, voice = false,
-            tts = true, screenContext = true, visualContext = false, autonomy = true,
+            tts = true, screenContext = true, visualContext = true, autonomy = true, screenCapture = true, screenScan = true,
         )
         assertEquals(res("hello"), hello.toJson())
         val status = SystemStatus(true, false, false, false, "play", DeviceTier.S, 3712, false)
@@ -75,10 +75,19 @@ class ContractFixturesTest {
         val field = FieldContext("com.whatsapp", "WhatsApp", InputKind.MULTILINE, ImeActionKind.NEWLINE, CapsMode.SENTENCES, hint = "Message", sensitive = false)
         val snapshot = ScreenContext(
             appPackage = "com.whatsapp", appLabel = "WhatsApp", category = "chat", screenType = "chat", field = field,
-            chat = Triple("Kofi", listOf("Kofi"), listOf(ChatMessage("m1", false, "Kofi", "Do you deliver to Kumasi?", 1764205000000))),
+            chat = ChatContext("Kofi", listOf("Kofi"), listOf(ChatMessage("m1", false, "Kofi", "Do you deliver to Kumasi?", 1764205000000)), ChatContext.LIKELY),
             sensitivity = SensitivityFlags(false, false, false), rung = 1, capturedAt = 1764205001000, ttlMs = 30000,
         )
         assertEquals(res("context.snapshot"), snapshot.toJson())
+
+        val chrome = FieldContext("com.android.chrome", "Chrome", InputKind.TEXT, ImeActionKind.GO, CapsMode.NONE, hint = "Search", sensitive = false)
+        val scan = ScreenContext(
+            appPackage = "com.android.chrome", appLabel = "Chrome", category = "browser", screenType = "article", field = chrome,
+            text = "Sunny, 31°C\nLight wind from the south-west", textTitle = "Kumasi weather",
+            images = listOf(ScreenImage("f_12", 432, 720)), sensitivity = SensitivityFlags(false, false, false),
+            scan = ScanInfo(3, complete = true, restored = true), rung = 3, capturedAt = 1764205001000, ttlMs = 30000,
+        )
+        assertEquals(res("context.scan"), scan.toJson())
     }
 
     @Test fun nativeEventsMatchFixtures() {
@@ -94,7 +103,8 @@ class ContractFixturesTest {
             ev["suggestions.update"],
             obj("items" to listOf(Suggestion("world", "completion", true), Suggestion("word", "correction"))),
         )
-        assertEquals(ev["autonomy.phase"], obj("phase" to AutonomyPhase.PAUSED.wire, "detail" to "Off in secure fields"))
+        assertEquals(ev["autonomy.phase"], obj("phase" to AutonomyPhase.PAUSED.wire, "detail" to "Off in secure fields", "consent" to true))
+        assertEquals(ev["screen.state"], obj("status" to "paused", "detail" to "Paused in protected fields"))
         assertEquals(ev["agent.error"], obj("runId" to "run_42", "code" to "unavailable", "message" to "AI models are not installed yet."))
         assertEquals(ev["agent.token"], obj("runId" to "run_42", "delta" to "Dear "))
         assertEquals(ev["voice.end"], obj())

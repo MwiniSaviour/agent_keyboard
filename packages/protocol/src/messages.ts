@@ -13,6 +13,7 @@ import type {
   FieldContext,
   ImeAction,
   Insight,
+  ScreenCaptureStatus,
   ScreenContext,
   Suggestion,
   SystemSettingsTarget,
@@ -77,12 +78,24 @@ export interface ShellCommands {
    * window to it, so height settings and panels never clip or leave a gap (SPEC §9). Integer, 120–600.
    */
   'ui.resize': { height: number };
+  /**
+   * Start/stop live screen capture (ADR-0010). Starting shows the system MediaProjection consent
+   * dialog every session; frames stay in memory, are downscaled, and pause in secure fields and blocked
+   * apps. Progress arrives as `screen.state`.
+   */
+  'screen.capture': { enabled: boolean };
 }
 
 /** Request/response pairs: shell → native → shell. */
 export interface ShellRequests {
   hello: { req: { shellVersion: string }; res: Capabilities };
   'context.snapshot': { req: { scope: 'field' | 'screen' | 'visual' }; res: ScreenContext };
+  /**
+   * Scroll the app under the keyboard and read up to `pages` screens (1–8), then scroll back
+   * (ADR-0010). Only ever sent from an explicit user tap; the host refuses it in secure fields.
+   * `up` reads older content (chats), `down` reads further (articles).
+   */
+  'context.scan': { req: { direction: 'up' | 'down'; pages: number }; res: ScreenContext };
   'clipboard.list': { req: Empty; res: ClipboardItem[] };
   'agents.list': { req: Empty; res: AgentDefinition[] };
   'system.status': { req: Empty; res: SystemStatus };
@@ -98,13 +111,15 @@ export interface NativeEvents {
   'agent.token': { runId: string; delta: string };
   'agent.done': AgentRunResult;
   'agent.error': { runId: string; code: 'cancelled' | 'unavailable' | 'policy' | 'internal'; message: string };
-  'autonomy.phase': { phase: AutonomyPhase; detail?: string };
+  /** `consent` reports the native consent record (the source of truth, FR-AU-02) when known. */
+  'autonomy.phase': { phase: AutonomyPhase; detail?: string; consent?: boolean };
   'voice.partial': { text: string };
   'voice.final': { text: string };
   'voice.level': { rms: number };
   'voice.end': Empty;
   'theme.update': { mode: ThemeMode; systemDark: boolean };
   'agents.changed': Empty;
+  'screen.state': { status: ScreenCaptureStatus; detail?: string };
 }
 
 /** Error payload for `{type: "error", re}` responses. `code` is stable; `message` is user-presentable. */

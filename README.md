@@ -3,7 +3,7 @@
 An **offline-first AI keyboard** for Android, built with Capacitor and Next.js. It understands what's on your screen (chats, forms, essays, images), types with your voice, refines and explains text, reads aloud, and in **autonomous mode** replies to chats or fills forms for you. It runs on 4 GB phones, and all inference happens on the device.
 
 > Status: **Part 1 (agent shell)** is done: keyboard UI, protocol, engine and a full in-browser simulation.
-> **Part 2 (native Android host)** is written and verified without a device: the IME service, shell transport, native fallback keyboard, `:agent` process (SQLCipher store, notification context, TTS, companion plugin), plus 107 JVM tests and a `-Werror` type-check of both flavors against the real Android APIs (ADR-0009). It has **not yet been built with Gradle or run on a device**. Pre-Part-3 review and fixes: [`docs/reviews/2026-11-27-part2-review.md`](docs/reviews/2026-11-27-part2-review.md).
+> **Part 2 (native Android host)** is written and verified without a device: the IME service, shell transport, native fallback keyboard, `:agent` process (SQLCipher store, notification context, TTS, companion plugin), live screen capture and scroll-and-read (ADR-0010), plus 134 JVM tests and a `-Werror` type-check of both flavors against the real Android APIs (ADR-0009). It has **not yet been built with Gradle or run on a device**. Pre-Part-3 review and fixes: [`docs/reviews/2026-11-27-part2-review.md`](docs/reviews/2026-11-27-part2-review.md).
 > **Part 3 (on-device models)** is next: `agent.run` currently answers `unavailable`. See [`docs/SPEC.md`](docs/SPEC.md).
 
 ## Try it
@@ -49,7 +49,7 @@ apps/shell/android    native host (Gradle; Capacitor 8)
 
 | Command | What it does |
 |---|---|
-| `npm run check` | Typechecks all packages, runs the tests (engine 40, protocol 3, shell 40) and builds |
+| `npm run check` | Typechecks all packages, runs the tests (engine 41, protocol 3, shell 43) and builds |
 | `npm run build` | Static export to `apps/shell/out` (includes the web mock for the playground) |
 | `npm run build:native -w @ak/shell` | Production build with `NEXT_PUBLIC_AK_MOCK=0`; the mock is removed from the bundle |
 | `npm run size -w @ak/shell` | NFR-P-14 budget for `/ime` (app code ≤ 40 KB gzip on top of the framework) |

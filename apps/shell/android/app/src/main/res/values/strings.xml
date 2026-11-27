@@ -9,8 +9,8 @@
     <string name="ime_subtype_en">English (US)</string>
 
     <string name="a11y_label">Agent Keyboard screen context</string>
-    <string name="a11y_summary">Lets the keyboard read the conversation or form on screen so its suggestions fit what you\'re looking at. Read-only. Nothing leaves your phone.</string>
-    <string name="a11y_description">When enabled, Agent Keyboard reads the text of the app you are typing in (for example, the last messages of a chat or the labels of a form) only while the keyboard is open, so replies and form-fill suggestions match the context. It never reads password fields, secure screens, or apps on your blocklist, and it does not tap, scroll or type anything on your behalf in this version. Everything stays on your device.</string>
+    <string name="a11y_summary">Lets the keyboard read the conversation or form on screen so its suggestions fit what you\'re looking at. It scrolls only when you ask. Nothing leaves your phone.</string>
+    <string name="a11y_description">When enabled, Agent Keyboard reads the text of the app you are typing in (for example, the last messages of a chat or the labels of a form) only while the keyboard is open, so replies and form-fill suggestions match the context. It never reads password fields, secure screens, or apps on your blocklist, and it never taps or types anything on your behalf. It scrolls the app only when you tap Read earlier messages or Read whole page in the keyboard, then scrolls it back. Everything stays on your device.</string>
 
     <string name="agent_channel_name">Assistant activity</string>
     <string name="agent_channel_desc">Shown while the assistant is drafting or sending a reply for you.</string>
@@ -18,6 +18,12 @@
     <string name="agent_fgs_text">Drafting on your device</string>
     <string name="needs_you_channel_name">Needs you</string>
     <string name="needs_you_title">Autopilot needs you</string>
+
+    <string name="capture_channel_name">Live screen</string>
+    <string name="capture_channel_desc">Shown while your keyboard agent can see the app above the keyboard.</string>
+    <string name="capture_fgs_title">Live screen is on</string>
+    <string name="capture_fgs_text">Your agent can see the app above the keyboard. Frames stay in memory on this phone.</string>
+    <string name="capture_stop">Stop</string>
 
     <string name="fallback_space">space</string>
 </resources>

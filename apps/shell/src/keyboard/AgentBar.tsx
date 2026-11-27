@@ -11,6 +11,7 @@ export function AgentBar() {
   const live = useShellState((s) => s.autonomy.enabled && ['planning', 'review', 'typing', 'sending'].includes(s.autonomy.phase));
   const panel = useShellState((s) => s.panel);
   const secure = useShellState((s) => s.field?.sensitive ?? false);
+  const screenLive = useShellState((s) => s.screen.status === 'live');
 
   return (
     <div className={css.bar}>
@@ -49,9 +50,15 @@ export function AgentBar() {
           className={css.iconBtn}
           data-active={panel === 'context'}
           onClick={() => controller.openPanel('context')}
-          aria-label="Screen context and actions"
+          aria-label={screenLive ? 'Screen context and actions. Live screen is on' : 'Screen context and actions'}
         >
-          <LensIcon size={26} />
+          {screenLive ? (
+            <span className={css.liveBadge} aria-hidden>
+              LIVE
+            </span>
+          ) : (
+            <LensIcon size={26} />
+          )}
         </button>
         <button
           type="button"

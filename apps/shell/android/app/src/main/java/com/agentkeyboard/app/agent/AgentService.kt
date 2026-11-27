@@ -15,6 +15,7 @@ import android.os.Process
 import com.agentkeyboard.app.AkLog
 import com.agentkeyboard.app.MainActivity
 import com.agentkeyboard.app.R
+import com.agentkeyboard.core.agent.AgentRuntime
 import com.agentkeyboard.core.protocol.PROTOCOL_VERSION
 
 /**
@@ -27,8 +28,12 @@ class AgentService : Service() {
     private val binder = object : IAgentService.Stub() {
         override fun protocolVersion(): Int = PROTOCOL_VERSION
 
-        override fun post(envelopeJson: String) {
-            if (trusted()) AgentHub.post { it.post(envelopeJson) }
+        override fun post(envelopeJson: String, origin: String) {
+            if (trusted() && origin in AgentRuntime.ORIGINS) AgentHub.post { it.post(envelopeJson, origin) }
+        }
+
+        override fun remoteReply(requestId: String, conversationKey: String, text: String) {
+            if (trusted()) AgentHub.post { it.remoteReply(requestId, conversationKey, text) }
         }
 
         override fun recordClipboard(text: String, sensitiveSource: Boolean) {
@@ -43,8 +48,9 @@ class AgentService : Service() {
             if (trusted()) AgentHub.post { it.appendAudit(auditJson) }
         }
 
-        override fun register(callback: IAgentCallback) {
-            if (trusted()) AgentHub.callbacks.register(callback)
+        override fun register(callback: IAgentCallback, origin: String) {
+            // The origin is the registration cookie: targeted replies go to that client only.
+            if (trusted() && origin in AgentRuntime.ORIGINS) AgentHub.callbacks.register(callback, origin)
         }
 
         override fun unregister(callback: IAgentCallback) {
@@ -67,7 +73,12 @@ class AgentService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         // Only ever started by startForegroundCompat(): promote within the 10 s window, every time.
-        if (intent?.action == ACTION_FOREGROUND) setForeground(true)
+        if (intent?.action == ACTION_FOREGROUND) {
+            setForeground(true) // mandatory after startForegroundService, even if the run already ended
+            // F15: the run may have finished while this start was in flight; its "not busy" found no
+            // service to demote. Demote now instead of staying foreground until the next run.
+            if (!AgentHub.busy) setForeground(false)
+        }
         return START_NOT_STICKY // a killed draft is abandoned, never silently resumed
     }
 

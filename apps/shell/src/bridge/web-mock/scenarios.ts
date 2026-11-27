@@ -17,7 +17,8 @@ export interface Scenario {
   title: string;
   app: { package: string; label: string; category: 'chat' | 'browser' | 'docs' };
   fields: FieldDef[];
-  chat?: { title: string; participants: string[]; messages: ChatMessage[]; incoming: string[] };
+  /** `history`: older messages above the visible ones, revealed by a scroll-and-read (`context.scan`). */
+  chat?: { title: string; participants: string[]; messages: ChatMessage[]; incoming: string[]; history: ChatMessage[] };
   form?: { title: string; fields: FormField[] };
   article?: { title: string; paragraphs: string[]; selectable: string[] };
   voicePhrase: string;
@@ -64,6 +65,11 @@ export const SCENARIOS: Record<ScenarioId, Scenario> = {
         msg('m1', 'them', 'Hi! I saw your post about the skincare bundle 😊', 12),
         msg('m2', 'me', 'Hello Jane! Yes, it’s available this week.', 11),
         msg('m3', 'them', 'How much is it, and do you deliver to Kumasi?', 1),
+      ],
+      history: [
+        msg('h1', 'them', 'Good evening, are you the one selling shea butter sets?', 1_460),
+        msg('h2', 'me', 'Yes! Shea set is GH₵ 120, the full skincare bundle is GH₵ 250.', 1_455),
+        msg('h3', 'them', 'Okay, let me check with my sister and come back.', 1_450),
       ],
       incoming: [
         'Great! Can I pay on delivery?',

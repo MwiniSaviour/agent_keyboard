@@ -92,3 +92,17 @@
 | HeliBoard (AOSP/OpenBoard fork) is fully offline, but it's GPL-3.0 and glide typing needs a closed library. | [HeliBoard](https://github.com/heliborg/heliboard) |
 
 **Implication:** don't copy GPL code into a proprietary product. AOSP LatinIME (Apache-2.0) dictionaries/algorithms are the safe reference.
+
+## R11. Screen-aware copilots (Cluely case study) and Android capture
+
+| Finding | Source |
+|---|---|
+| Cluely is a desktop overlay. Screen OCR plus mic/system-audio transcription feed a cloud LLM, and suggestions arrive in about 1–2 s because context is captured continuously. | [ScreenComply: how Cluely works](https://screencomply.ai), [Final Round AI](https://www.finalroundai.com) |
+| The overlay excludes itself from screen capture (`WDA_EXCLUDEFROMCAPTURE` / `NSWindowSharingNone`). A 2025 breach exposed about 83k users' transcripts and screenshots stored in the cloud. | [Natively: is Cluely safe?](https://heynatively.com) |
+| Open clones use Electron `setContentProtection`. One keeps a screenshot queue capped at 50 (oldest dropped), hides its window about 300 ms before capture, and has per-message context toggles. Another pairs a screenshot queue with Tesseract OCR. | [Open-Cluely](https://github.com/shubhamshnd/Open-Cluely), [free-cluely](https://github.com/Prat011/free-cluely) (Apache-2.0), [cheating-daddy](https://github.com/sohzm/cheating-daddy) (GPL) |
+| Android MediaProjection rules: on API 34+ it needs a `mediaProjection` FGS plus `FOREGROUND_SERVICE_MEDIA_PROJECTION`, started before `getMediaProjection()`. Consent is per session and the token is single-use. Use one VirtualDisplay per projection. The user can pick a single app or the whole screen. `FLAG_SECURE` windows capture black. `AccessibilityService.takeScreenshot` (API 30+) is stills-only and rate-limited. | [Fora Soft: screen sharing on Android](https://www.forasoft.com) |
+| Google Play Accessibility API policy forbids autonomous, AI-initiated accessibility actions. Deterministic routines the user starts are allowed. It requires a listing disclosure, a Console declaration and in-app prominent disclosure. `isAccessibilityTool` is for disability apps only. | [Play Console Help 16558241](https://support.google.com/googleplay/android-developer/answer/16558241) |
+
+**Implication (ADR-0010):** copy Cluely's always-warm, region-limited, bounded capture. Reject its
+invisibility and cloud storage: we show the user everything and keep frames in RAM only. Scroll only
+when the user starts it in `play`.

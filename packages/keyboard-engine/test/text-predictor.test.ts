@@ -58,6 +58,14 @@ describe('editor model', () => {
     expect(replaceText(s, 'word', 'world').before).toBe('hello world');
     expect(replaceText(s, 'field', 'X')).toEqual({ before: 'X', after: '', selected: '' });
   });
+  it('moveCursor steps over whole graphemes (the native D-pad unit)', () => {
+    const s = { before: 'hi 👍🏽', after: '👨‍👩‍👧x', selected: '' };
+    expect(moveCursor(s, -1)).toEqual({ before: 'hi ', after: '👍🏽👨‍👩‍👧x', selected: '' });
+    expect(moveCursor(s, 1)).toEqual({ before: 'hi 👍🏽👨‍👩‍👧', after: 'x', selected: '' });
+    expect(moveCursor({ before: 'a', after: 'b', selected: 'SEL' }, -1)).toEqual({ before: 'a', after: 'SELb', selected: '' });
+    expect(moveCursor({ before: 'a', after: 'b', selected: 'SEL' }, 2)).toEqual({ before: 'aSELb', after: '', selected: '' });
+  });
+
   it('moveCursor clamps', () => {
     const s = { before: 'ab', after: 'cd', selected: '' };
     expect(moveCursor(s, -5)).toEqual({ before: '', after: 'abcd', selected: '' });

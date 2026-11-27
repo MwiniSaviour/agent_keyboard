@@ -13,6 +13,7 @@ import type {
   NativeBridge,
   NativeEventType,
   NativeEvents,
+  ScreenCaptureStatus,
   ScreenContext,
   ShellCommandType,
   ShellCommands,
@@ -20,6 +21,7 @@ import type {
   ShellRequests,
   Unsubscribe,
 } from '@ak/protocol';
+import { BridgeError } from '@ak/protocol';
 import { fullText } from '@ak/keyboard-engine';
 import { agentRepository, agentsStore } from '@/agents/repository';
 import { GENERAL_AGENT_ID } from '@/agents/defaults';
@@ -28,6 +30,23 @@ import { checkInbound, checkOutbound, RateLimiter } from './policy';
 import { fixGrammar, runSkill } from './runtime';
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+const CONSENT_RECORD = 'ak.mock.native-consent.v1';
+function readConsent(): boolean {
+  try {
+    return typeof localStorage !== 'undefined' && localStorage.getItem(CONSENT_RECORD) === '1';
+  } catch {
+    return false;
+  }
+}
+function writeConsent(granted: boolean): void {
+  try {
+    if (granted) localStorage.setItem(CONSENT_RECORD, '1');
+    else localStorage.removeItem(CONSENT_RECORD);
+  } catch {
+    /* storage unavailable */
+  }
+}
 
 export class WebMockBridge implements NativeBridge {
   readonly kind = 'web-mock' as const;
@@ -70,6 +89,7 @@ export class WebMockBridge implements NativeBridge {
         case 'focus':
           this.emitEditorStart();
           this.emitInsight();
+          this.syncCapture();
           if (this.autonomy.enabled) void this.autonomyTick();
           break;
         case 'text':
@@ -177,7 +197,13 @@ export class WebMockBridge implements NativeBridge {
       case 'app.open':
         if (typeof window !== 'undefined') window.location.href = (p as ShellCommands['app.open']).route;
         return;
-      case 'settings.set':
+      case 'screen.capture':
+        return this.setCapture((p as ShellCommands['screen.capture']).enabled);
+      case 'settings.set': {
+        const { key, value } = p as ShellCommands['settings.set'];
+        if (key === 'autonomy.consent') this.setConsent(value === true);
+        return;
+      }
       case 'ui.resize':
       case 'system.open':
         return;
@@ -203,8 +229,16 @@ export class WebMockBridge implements NativeBridge {
           this.emitInsight();
         }, 0);
         return this.capabilities() as ShellRequests[T]['res'];
-      case 'context.snapshot':
+      case 'context.snapshot': {
+        const { scope } = payload as ShellRequests['context.snapshot']['req'];
+        if (scope === 'visual') {
+          if (this.capture !== 'live') throw new BridgeError('remote', 'Live screen is off');
+          return this.withFrame(this.snapshot()) as ShellRequests[T]['res'];
+        }
         return this.snapshot() as ShellRequests[T]['res'];
+      }
+      case 'context.scan':
+        return this.scan(payload as ShellRequests['context.scan']['req']) as ShellRequests[T]['res'];
       case 'clipboard.list':
         return [...this.clipboard].sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.at - a.at) as ShellRequests[T]['res'];
       case 'agents.list':
@@ -219,12 +253,14 @@ export class WebMockBridge implements NativeBridge {
           tier: 'M',
           totalRamMb: 0,
           modelsInstalled: false,
+          autonomyConsent: this.consent,
         } as ShellRequests[T]['res'];
     }
     throw new Error(`unknown request ${String(type)}`);
   }
 
   dispose(): void {
+    if (this.captureTimer) clearTimeout(this.captureTimer);
     this.unsubHost();
     this.unsubAgents();
     this.handlers.clear();
@@ -244,7 +280,72 @@ export class WebMockBridge implements NativeBridge {
       screenContext: true,
       visualContext: true,
       autonomy: true,
+      screenCapture: true,
+      screenScan: true,
     };
+  }
+
+  // ───────────── Live screen + scroll-and-read (ADR-0010), simulated ─────────────
+
+  private capture: ScreenCaptureStatus = 'off';
+  /** Stands in for the native consent record (AgentRuntime, KEY_CONSENT). Persisted like native. */
+  private consent = readConsent();
+
+  private setConsent(granted: boolean): void {
+    if (granted === this.consent) return; // only a change is recorded (audited natively)
+    this.consent = granted;
+    writeConsent(granted);
+    if (!granted) {
+      this.autonomy.token++;
+      this.autonomy.enabled = false;
+      this.autonomy.phase = 'off';
+      this.emit('autonomy.phase', { phase: 'off', detail: 'Consent withdrawn', consent: false });
+    }
+  }
+  private captureTimer: ReturnType<typeof setTimeout> | null = null;
+
+  private setCapture(enabled: boolean): void {
+    if (this.captureTimer) clearTimeout(this.captureTimer);
+    if (!enabled) {
+      this.capture = 'off';
+      return this.emit('screen.state', { status: 'off' });
+    }
+    if (this.host.field()?.sensitive) return; // native refuses in secure fields
+    this.capture = 'starting';
+    this.emit('screen.state', { status: 'starting', detail: 'Waiting for your OK' });
+    // Stands in for the system MediaProjection consent dialog.
+    this.captureTimer = setTimeout(() => this.syncCapture(), 500);
+  }
+
+  /** Mirrors the native gate: paused (and purged) in protected fields. */
+  private syncCapture(): void {
+    if (this.capture === 'off') return;
+    const paused = this.host.field()?.sensitive === true;
+    const next: ScreenCaptureStatus = paused ? 'paused' : 'live';
+    if (next === this.capture) return;
+    this.capture = next;
+    this.emit('screen.state', paused ? { status: 'paused', detail: 'Paused in protected fields' } : { status: 'live' });
+  }
+
+  /** Rung 3: attach the "frame". The playground draws a schematic of the host app as the preview. */
+  private withFrame(ctx: ScreenContext): ScreenContext {
+    const lines = ctx.chat ? ctx.chat.messages.slice(-6).map((m) => ({ me: m.from === 'me', w: Math.min(150, 40 + m.text.length * 2) })) : [];
+    const rows = (lines.length ? lines : [{ me: false, w: 150 }, { me: false, w: 120 }, { me: false, w: 140 }])
+      .map((l, i) => `<rect x="${l.me ? 170 - l.w : 10}" y="${34 + i * 22}" width="${l.w}" height="16" rx="5" fill="${l.me ? '#0a0a0a' : '#d6d6d4'}"/>`)
+      .join('');
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="180" height="180" viewBox="0 0 180 180"><rect width="180" height="180" fill="#f2f2f0"/><rect width="180" height="24" fill="#e4e4e2"/>${rows}</svg>`;
+    return { ...ctx, rung: 3, images: [{ handle: `f_${Date.now() % 100_000}`, width: 432, height: 432, preview: `data:image/svg+xml;base64,${btoa(svg)}` }] };
+  }
+
+  private scan({ direction, pages }: ShellRequests['context.scan']['req']): ScreenContext {
+    const ctx = this.snapshot();
+    const sc = this.host.scenario;
+    if (sc.chat && direction === 'up' && pages > 1 && ctx.chat) {
+      ctx.chat = { ...ctx.chat, messages: [...sc.chat.history, ...ctx.chat.messages].slice(-20) };
+    }
+    const reached = sc.chat ? direction === 'up' : direction === 'down';
+    ctx.scan = { pages: reached ? Math.min(pages, 2) : 1, complete: true, restored: true };
+    return this.capture === 'live' ? this.withFrame(ctx) : ctx;
   }
 
   private emitEditorStart(): void {
@@ -359,6 +460,12 @@ export class WebMockBridge implements NativeBridge {
     this.autonomy.token++;
     this.autonomy = { ...this.autonomy, enabled: p.enabled, level: p.level, agentId: p.agentId };
     if (!p.enabled) return this.setPhase('off');
+    if (!this.consent) {
+      // Native refuses to arm without its own consent record (FR-AU-02) and says why.
+      this.autonomy.enabled = false;
+      this.autonomy.phase = 'off';
+      return this.emit('autonomy.phase', { phase: 'off', detail: 'Consent needed', consent: false });
+    }
     const field = this.host.field();
     if (!field || field.sensitive) return this.setPhase('paused', 'protected field');
     this.setPhase('arming');

@@ -75,7 +75,7 @@ class ImeWebView(private val context: Context, private val listener: Listener) {
         wv.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, true)
         wv.webViewClient = object : WebViewClient() {
             override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? =
-                if (request.url.host == ORIGIN_HOST) loader.shouldInterceptRequest(request.url) else BLOCKED
+                if (request.url.host == ORIGIN_HOST) loader.shouldInterceptRequest(request.url) else blocked()
 
             /** No navigation away from the shell, ever (SPEC §9 / §17.1). */
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean =
@@ -185,11 +185,12 @@ class ImeWebView(private val context: Context, private val listener: Listener) {
          * Verified in Chromium by `apps/shell/e2e/csp.mjs`.
          */
         private val SECURITY_HEADERS = mapOf(
-            "Content-Security-Policy" to "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+            "Content-Security-Policy" to "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
             "X-Content-Type-Options" to "nosniff",
             "Cache-Control" to "no-store",
         )
 
-        private val BLOCKED = WebResourceResponse("text/plain", "utf-8", 403, "Blocked", emptyMap(), "".byteInputStream())
+        /** A fresh response per request: a WebResourceResponse's stream is consumed once. */
+        private fun blocked() = WebResourceResponse("text/plain", "utf-8", 403, "Blocked", emptyMap(), "".byteInputStream())
     }
 }

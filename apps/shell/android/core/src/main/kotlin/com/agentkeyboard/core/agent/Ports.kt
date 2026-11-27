@@ -56,18 +56,38 @@ interface Speech {
     fun stop()
 }
 
-/** Outbound traffic to every bound IME (AIDL `IAgentCallback`). */
+/**
+ * Outbound traffic to bound clients (AIDL `IAgentCallback`). [to] is a client origin
+ * ([AgentRuntime.ORIGIN_IME] / [AgentRuntime.ORIGIN_COMPANION]); null broadcasts to everyone.
+ */
 interface AgentOutput {
-    fun envelope(raw: String)
+    fun envelope(raw: String, to: String?)
     fun inbound(packageName: String, conversationKey: String, messageJson: String, remoteInputAvailable: Boolean)
+    /** Result of an IME-requested RemoteInput send ([AgentRuntime.remoteReply]). */
+    fun remoteReplyResult(requestId: String, ok: Boolean) {}
+}
+
+/** Sends text through a conversation's notification RemoteInput (FR-AU-09). Android: `AkNotificationListener`. */
+fun interface ReplyChannel {
+    fun send(conversationKey: String, text: String): Boolean
 }
 
 // ───────────────────────────── Inference (Part 3 seam) ─────────────────────────────
 
 data class RunContext(
     val field: FieldContext?,
-    /** Rung-1 conversation for the focused app; null in blocked apps or when nothing was captured. */
+    /**
+     * Rung-1 conversation for the focused app; null in blocked apps, when nothing was captured, or when
+     * it can't be told apart from other chats of that app (never draft into the wrong chat).
+     */
     val conversation: ConversationCache.Conversation?,
+    /**
+     * Screen text the IME read for this run (rung 2: accessibility, or a scroll-and-read pass),
+     * already redacted and bounded. Null when screen reading is off or the run came from the companion.
+     */
+    val screenText: String? = null,
+    /** Where [screenText] came from: `a11y` (visible screen) or `scan` (several scrolled pages). */
+    val screenSource: String? = null,
 )
 
 data class InferenceJob(val request: AgentRunRequest, val agent: AgentDefinition, val context: RunContext)

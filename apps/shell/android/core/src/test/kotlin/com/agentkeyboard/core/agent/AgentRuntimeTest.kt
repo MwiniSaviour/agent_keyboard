@@ -62,8 +62,12 @@ class AgentRuntimeTest {
     }
     private class Out : AgentOutput {
         val envelopes = mutableListOf<Envelope>()
+        val targets = mutableListOf<String?>()
         val inbound = mutableListOf<Pair<String, String>>()
-        override fun envelope(raw: String) { envelopes += (EnvelopeCodec.decode(raw) as Decoded.Ok).envelope }
+        val replyResults = mutableListOf<Pair<String, Boolean>>()
+        override fun envelope(raw: String, to: String?) { envelopes += (EnvelopeCodec.decode(raw) as Decoded.Ok).envelope; targets += to }
+        override fun remoteReplyResult(requestId: String, ok: Boolean) { replyResults += requestId to ok }
+        fun targetOf(t: String) = targets[envelopes.indexOfFirst { it.type == t }]
         override fun inbound(packageName: String, conversationKey: String, messageJson: String, remoteInputAvailable: Boolean) {
             inbound += conversationKey to messageJson
         }
@@ -95,10 +99,12 @@ class AgentRuntimeTest {
     private val busy = mutableListOf<Boolean>()
     private val direct = Executor { it.run() }
 
+    private val sentReplies = mutableListOf<Pair<String, String>>()
     private fun runtime(engine: InferenceEngine = NoModelEngine, engineExec: Executor = direct) = AgentRuntime(
         agents, clips, audit, settings, speech, engine, out,
         status = { SystemStatus(true, true, false, false, "play", DeviceTier.S, 4096, false) },
         engineExecutor = engineExec, serial = direct, onBusyChanged = { busy += it }, clock = { now },
+        replies = { key, text -> sentReplies += key to text; true },
     ).also { it.start() }
 
     private var seq = 0
@@ -315,5 +321,91 @@ class AgentRuntimeTest {
         rt.onNotification(bank, "Alert", listOf(ChatMessage("1", false, "Bank", "OTP", 1)), true)
         assertTrue(out.inbound.isEmpty())
         assertNull(rt.conversations.latestFor(bank))
+    }
+
+    // ───────── review fixes: origins, consent, chat resolution, remote replies ─────────
+
+    @Test fun consentIsAuditedOnlyWhenItChanges() {
+        val rt = runtime()
+        rt.post(env("settings.set", """{"key":"autonomy.consent","value":false}""")) // never granted: no-op audit
+        rt.post(env("settings.set", """{"key":"autonomy.consent","value":true}"""))
+        rt.post(env("settings.set", """{"key":"autonomy.consent","value":true}""")) // shell re-sync
+        rt.post(env("system.status"))
+        assertEquals(true, out.ofType("system.status.result").single().p()["autonomyConsent"]?.let { (it as com.agentkeyboard.core.json.JsonBool).value })
+        rt.post(env("settings.set", """{"key":"autonomy.consent","value":false}"""), AgentRuntime.ORIGIN_COMPANION) // revoke from the companion
+        assertFalse(rt.autonomyConsented())
+        assertEquals(listOf("consent_granted", "consent_revoked"), audit.rows.map { it.action })
+    }
+
+    @Test fun repliesAndRunEventsGoOnlyToTheOriginatingClient() {
+        val rt = runtime(ScriptedEngine(listOf("Hi")))
+        rt.post(env("agents.list"), AgentRuntime.ORIGIN_COMPANION)
+        assertEquals(AgentRuntime.ORIGIN_COMPANION, out.targetOf("agents.list.result"))
+        rt.focusChanged(field(sensitive = true)) // the keyboard is in a password field…
+        rt.post(run("c1"), AgentRuntime.ORIGIN_COMPANION) // …which must not block a companion run
+        assertEquals("c1", out.ofType("agent.done").single().p()["runId"].str())
+        assertEquals(AgentRuntime.ORIGIN_COMPANION, out.targetOf("agent.token"))
+        assertEquals(AgentRuntime.ORIGIN_COMPANION, out.targetOf("agent.done"))
+        rt.post(run("i1")) // an IME run in that field is refused, and only the IME hears about it
+        assertEquals("policy", out.ofType("agent.error").single().p()["code"].str())
+        assertEquals(AgentRuntime.ORIGIN_IME, out.targetOf("agent.error"))
+        rt.post(env("agents.delete", """{"id":"agent_x"}"""))
+        assertNull(out.targetOf("agents.changed"), "shared state is broadcast")
+        rt.post(env("context.snapshot", """{"scope":"screen"}"""), AgentRuntime.ORIGIN_COMPANION)
+        assertEquals(AgentRuntime.ORIGIN_COMPANION, out.targetOf("error"))
+    }
+
+    @Test fun rungOneResolvesTheChatOnScreenAndNeverDraftsFromAGuess() {
+        val engine = ScriptedEngine(listOf("ok"), needsForeground = false)
+        val rt = runtime(engine)
+        rt.onNotification("com.whatsapp", "Ama", listOf(ChatMessage("1", false, "Ama", "Price?", 100)), true)
+        now += 1_000
+        rt.onNotification("com.whatsapp", "Kofi", listOf(ChatMessage("2", false, "Kofi", "Deliver?", 200)), true)
+        rt.focusChanged(field())
+
+        rt.post(env("context.snapshot", """{"scope":"screen","titleHint":"‪Ama‬ 🟢"}"""))
+        val exact = out.ofType("context.snapshot.result").last().p()["chat"].objOrNull()!!
+        assertEquals("Ama", exact["title"].str())
+        assertEquals("exact", exact["match"].str())
+
+        rt.post(env("context.snapshot", """{"scope":"screen"}"""))
+        val guess = out.ofType("context.snapshot.result").last().p()["chat"].objOrNull()!!
+        assertEquals("Kofi", guess["title"].str()) // shown, with its title, but flagged
+        assertEquals("uncertain", guess["match"].str())
+
+        rt.post(run("r1"))
+        assertNull(engine.lastJob!!.context.conversation, "two recent chats and no title: no conversation context")
+        rt.post(env("agent.run", """{"runId":"r2","agentId":"general","skill":"reply","target":"conversation","params":{"conversationTitle":"Ama","screen":{"text":"Ama: Price? card 4111 1111 1111 1111","source":"a11y"}}}"""))
+        val ctx = engine.lastJob!!.context
+        assertEquals("Ama", ctx.conversation?.title)
+        assertEquals("a11y", ctx.screenSource)
+        assertFalse(ctx.screenText!!.contains("4111 1111"), "screen text is redacted again in :agent")
+
+        now += 60 * 60 * 1000L // both chats go quiet; then only Ama writes again → she is the likely chat
+        rt.onNotification("com.whatsapp", "Ama", listOf(ChatMessage("3", false, "Ama", "Hello?", 300)), true)
+        rt.post(env("context.snapshot", """{"scope":"screen"}"""))
+        assertEquals("likely", out.ofType("context.snapshot.result").last().p()["chat"].objOrNull()!!["match"].str())
+    }
+
+    @Test fun remoteRepliesNeedConsentAndAKnownConversation() {
+        val rt = runtime()
+        rt.onNotification("com.whatsapp", "Ama", listOf(ChatMessage("1", false, "Ama", "Price?", 100)), true)
+        val key = com.agentkeyboard.core.context.ConversationCache.keyOf("com.whatsapp", "Ama")
+        rt.remoteReply("q1", key, "GH₵ 250")
+        rt.post(env("settings.set", """{"key":"autonomy.consent","value":true}"""))
+        rt.remoteReply("q2", "com.whatsapp|stranger", "hi")
+        rt.remoteReply("q3", key, "GH₵ 250")
+        assertEquals(listOf("q1" to false, "q2" to false, "q3" to true), out.replyResults)
+        assertEquals(listOf(key to "GH₵ 250"), sentReplies)
+    }
+
+    @Test fun confidenceAcceptsStringsAndNumbersAndFailsLow() {
+        fun c(json: String) = AgentRuntime.confidenceOf(Json.parse(json))
+        assertEquals(0.9, c("""{"confidence":"0.9"}"""))
+        assertEquals(0.75, c("""{"confidence":0.75}"""))
+        assertEquals(0.0, c("""{"confidence":"high"}"""))
+        assertEquals(0.0, c("""{"confidence":7}"""))
+        assertEquals(0.0, c("""{}"""))
+        assertEquals(0.0, AgentRuntime.confidenceOf(null))
     }
 }

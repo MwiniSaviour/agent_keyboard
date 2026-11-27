@@ -1,6 +1,7 @@
 package com.agentkeyboard.app.system
 
 import android.app.NotificationManager
+import android.content.ActivityNotFoundException
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -9,6 +10,7 @@ import android.os.Build
 import android.provider.Settings
 import android.view.inputmethod.InputMethodManager
 import com.agentkeyboard.app.Ak
+import com.agentkeyboard.app.AkLog
 import com.agentkeyboard.app.MainActivity
 import com.agentkeyboard.app.a11y.ScreenReaderService
 import com.agentkeyboard.app.ime.AgentImeService
@@ -64,7 +66,13 @@ object SystemSettings {
             SystemSettingsTarget.ACCESSIBILITY -> Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
             SystemSettingsTarget.IME_PICKER -> return
         }
-        context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        try {
+            context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        } catch (e: ActivityNotFoundException) {
+            // Some OEM builds drop the detail screens: fall back to the top-level Settings page.
+            AkLog.w("settings screen missing for ${target.wire}")
+            runCatching { context.startActivity(Intent(Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+        }
     }
 
     /** Opens a companion route (e.g. `/agents/new`); the route was validated by the protocol decoder. */

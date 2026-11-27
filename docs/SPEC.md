@@ -157,9 +157,11 @@ voice.
 | FR-CX-02 | Screen context (with Accessibility consent): pruned node tree → compact **UI outline** (role, text, content-desc, bounds bucket), screen-type classifier (chat / form / article / feed / email / other). |
 | FR-CX-03 | Chat extraction: participants, last N messages with direction (in/out) and time, inferred from layout plus notification history. |
 | FR-CX-04 | Form extraction: fields with label, type, autofill hint, required, current value (never for sensitive fields). |
-| FR-CX-05 | Visual context: on request, screenshot (API 30+) → OCR (on-device) → optional VLM description of image regions. |
-| FR-CX-06 | FLAG_SECURE windows, password fields and user-blocked apps are **never** captured. |
-| FR-CX-07 | The context snapshot is ephemeral (in memory, TTL 2 min) unless the user saves it. |
+| FR-CX-05 | Visual context (ADR-0010): **live screen** via MediaProjection, turned on by the user (system consent each session). The newest frame of the app region above the keyboard is kept warm in RAM, so asking costs ~0 ms of capture. OCR (on-device) and an optional VLM description of image regions read those frames in Part 3. |
+| FR-CX-08 | Scroll-and-read (ADR-0010): on a user tap, the keyboard scrolls the app's main list (up for earlier chat messages, down for the rest of a page), reads up to 8 screens, merges them without duplicates and scrolls back. In `play` only a tap on the keyboard can start it (Play accessibility policy). In `full` the agent may also start it after Autopilot consent. |
+| FR-CX-09 | Transparency: while live screen is on, the keyboard shows a LIVE badge, Android shows its capture indicator and our notification has Stop. The Lens panel shows the exact frame and how many screens were read. |
+| FR-CX-06 | FLAG_SECURE windows, password fields and user-blocked apps are **never** captured. Live capture pauses and purges its buffer the moment one appears (all-black frames count as FLAG_SECURE). |
+| FR-CX-07 | The context snapshot is ephemeral (in memory, TTL 2 min) unless the user saves it. Live frames: in RAM only, ≤ 6 frames / 1.5 MB, TTL 30 s, zeroed on eviction, never written to disk or sent off the device. |
 
 ### 4.5 Voice (FR-VO)
 | ID | Requirement |
@@ -180,7 +182,7 @@ voice.
 | ID | Requirement |
 |---|---|
 | FR-AU-01 | Autonomy levels per agent and per app: **Off**, **Suggest** (insight only), **Draft** (types, user sends), **Auto** (types and sends). The default ceiling is *Draft*. |
-| FR-AU-02 | Activation requires: AUTO toggled on, the field focused with the keyboard open, an allowlisted app, a non-sensitive field and the one-time informed consent completed. |
+| FR-AU-02 | Activation requires: AUTO toggled on, the field focused with the keyboard open, an allowlisted app, a non-sensitive field and the one-time informed consent completed. Consent can be withdrawn in Settings → Privacy as easily as it was given. The native record in `:agent` is authoritative; it is written and audited only when it changes, and the keyboard follows it (`autonomy.phase.consent`, `SystemStatus.autonomyConsent`). |
 | FR-AU-03 | Instant takeover: any user touch on the keyboard pauses autonomy (< 50 ms) and the current draft remains editable. |
 | FR-AU-04 | Escalation: low confidence, money/commitment/personal-data requests, abusive content, unknown language or loop detection → stop and notify "Needs you". |
 | FR-AU-05 | Rate limits: ≤ 1 reply per incoming message burst, ≤ 6 replies / min / conversation, ≤ 60 / hour total. Bot ping-pong detection. |
@@ -438,6 +440,7 @@ the message on Android: **IME** = in-process in `ImeController`, **:agent** = fo
 | S→N | `editor.cursor` | `{delta}` | IME |
 | S→N | `feedback.key` | `{kind: "tap"\|"delete"\|"space"\|"return"\|"mod"}` | IME |
 | S→N | `ui.resize` | `{height}` integer dp, 120–600; the IME sizes its window to it | IME |
+| S→N | `screen.capture` | `{enabled}`. `true` shows the system MediaProjection consent dialog and starts live capture (refused in secure fields); `false` stops it and purges frames | IME |
 | S→N | `autonomy.set` / `autonomy.takeover` | `{enabled, level, agentId}` / `{}` | IME (state machine) |
 | S→N | `form.fill` | `{values: {key: text}}`, key = autofill hint, field label/id or profile concept (`email`, `givenName`, …). Native matches each value to a field deterministically (`core/editor/FormFill`) and writes it as focus reaches that field (60 s, same app). It never guesses, never fills sensitive fields and never submits | IME |
 | S→N | `clipboard.paste` | `{id}` | IME |
@@ -449,14 +452,18 @@ the message on Android: **IME** = in-process in `ImeController`, **:agent** = fo
 | S→N | `agents.save` / `agents.delete` | `{agent: AgentDefinition}` / `{id}`; General cannot be deleted | :agent |
 | S→N | `settings.set` | `{key, value}`; `autonomy.consent` is also mirrored natively in the IME. `keyboard.theme`, `keyboard.haptics` and `keyboard.keySounds` are IME-local (they drive native haptics/sounds and the fallback keyboard's theme) and are not forwarded to `:agent` | IME + :agent |
 | S↔N | `hello` | `{shellVersion}` → `Capabilities` | IME / plugin |
-| S↔N | `context.snapshot` | `{scope: "field"\|"screen"\|"visual"}` → `ScreenContext` (rung 0/2 in IME, rung 1 from :agent) | IME + :agent |
+| S↔N | `context.snapshot` | `{scope: "field"\|"screen"\|"visual"}` → `ScreenContext` (rung 0/2 in IME, rung 1 from :agent with `chat.match`; `visual` = rung 3 with the newest live frame `{handle, width, height, preview}`, `unavailable` while capture is off) | IME + :agent |
+| S↔N | `context.scan` | `{direction: "up"\|"down", pages: 1–8}` → `ScreenContext` with `scan {pages, complete, restored}`. User-started only (a tap on the keyboard within 3 s in `play`); refused in secure fields and blocked apps | IME |
 | S↔N | `clipboard.list` / `agents.list` / `system.status` | `{}` → `ClipboardItem[]` / `AgentDefinition[]` / `SystemStatus` | :agent |
 | N→S | `editor.start` / `editor.state` / `editor.finish` | `{field, state}` / `{before, after, selected}` (≤ 1 per frame, ≤ 2,000 chars a side) / `{}` | IME |
 | N→S | `suggestions.update` / `insight.update` | `{items}` / `{insight \| null}` | IME |
 | N→S | `agent.token` / `agent.done` / `agent.error` | `{runId, delta}` / `AgentRunResult` / `{runId, code, message}` | :agent (via IME) |
-| N→S | `autonomy.phase` | `{phase, detail?}` | IME |
+| N→S | `autonomy.phase` | `{phase, detail?, consent?}`; `consent` is sent on `hello` and whenever the native consent record changes | IME |
+| N→S | `screen.state` | `{status: "off"\|"starting"\|"live"\|"paused", detail?}` | IME |
 | N→S | `voice.partial` / `voice.final` / `voice.level` / `voice.end` | `{text}` / `{text}` / `{rms}` / `{}` | IME |
 | N→S | `theme.update` / `agents.changed` | `{mode, systemDark}` / `{}` | IME / :agent |
+
+Native-internal fields: `context.snapshot.titleHint` and `agent.run` `params.conversationTitle` / `params.screen {text, source}` are written by the IME only. Shell-supplied values are stripped before anything reaches `:agent` (ADR-0010).
 
 Replies are `<type>.result` with `re`, or `error {code, message}`, where `code` is one of `unknown_type`, `bad_payload`,
 `secure_field`, `unavailable`, `internal` or `version`.
@@ -487,12 +494,12 @@ Replies are `<type>.result` with `re`, or `error {code, message}`, where `code` 
 | Secure input | If the field is sensitive (FR-KB-14), the native side drops all `agent.*`, `context.*` and learning, and notifies the shell (`field.secure=true`). This is enforced natively, not trusted to JS. |
 | Insets | Keyboard height from the setting; `onComputeInsets` with touchable region = keyboard area only, panels included. |
 | Agent link | Bind to `:agent` service on first need (lazy); AIDL with `oneway` calls and callback interface; reconnect with backoff. |
-| Packaging | Product flavors: `play` (no accessibility actions), `full` (adds `A11yActions.clickSend`, sideload only) × `online`/`offline` (no INTERNET permission). |
+| Packaging | Product flavors: `play` (no accessibility actions except the user-started scroll of FR-CX-08), `full` (adds `A11yActions.clickSend`, sideload only) × `online`/`offline` (no INTERNET permission). |
 
 #### 9.1 Part 2 implementation map (ADR-0009)
 | Concern | Class (`apps/shell/android/`) | Notes |
 |---|---|---|
-| Pure logic: codec, router, editor ops, field classifier, form-fill matcher, autonomy reducer, privacy, conversation cache, `:agent` runtime | `core/` (`com.agentkeyboard.core.*`) | No Android imports; 107 JVM tests run with or without Gradle. |
+| Pure logic: codec, router, editor ops, field classifier, form-fill matcher, autonomy reducer, privacy, conversation cache, `:agent` runtime | `core/` (`com.agentkeyboard.core.*`) | No Android imports; 134 JVM tests run with or without Gradle. |
 | IME service, insets, editor-state throttle, secure-field gate | `app/…/ime/AgentImeService.kt` | Never fullscreen. Restarts the renderer at most 3 times a minute, then stays on the fallback until the next show after a 60 s cool-down. Remembers the shell's last height so cold starts open at the right size. |
 | Shell transport | `ime/ImeWebView.kt` | `addWebMessageListener` on `https://ak.local` only. Assets come from the static export with a header CSP and a hash-pinned meta CSP. |
 | Ownership split | `ime/ImeController.kt` | Editor, haptics, resize, autonomy and rung-0/2 context are handled in-process. Data and AI requests go to `:agent` with a 4 s timeout and fail fast when it is lost. |
@@ -502,9 +509,10 @@ Replies are `<type>.result` with `re`, or `error {code, message}`, where `code` 
 | `:agent` front, hub, FGS | `agent/AgentService.kt`, `agent/AgentHub.kt` | UID-checked binder. specialUse foreground only while a run is in flight. `START_NOT_STICKY`. |
 | Persistence | `storage/AkDatabase.kt`, `storage/KeyVault.kt` | SQLCipher with a raw 256-bit key wrapped by AndroidKeyStore AES-GCM in `noBackupFilesDir`, using the shared forward-only migrations. The store is reset only when the key is provably gone; transient Keystore errors are retried, never treated as data loss. |
 | Rung 1 + RemoteInput | `notify/AkNotificationListener.kt` | MessagingStyle parsing, plus reply actions kept in memory for consented background replies (Part 3). |
-| Rung 2 | `a11y/ScreenReaderService.kt` | Lazy, bounded (600 nodes, depth 40) and read on a background thread, never the IME's main thread. Skips password nodes and blocked apps. Read-only in `play`. |
+| Rung 2 + scroll-and-read | `a11y/ScreenReaderService.kt` | Lazy, bounded (600 nodes, depth 40) and read on a background thread, never the IME's main thread. Skips password nodes and blocked apps. Its only action is the user-started scan (`context.scan`): scroll the largest scrollable node, read, merge (`core/context/ScanMerger`, `ScanPlanner`), scroll back. |
+| Rung 3: live screen | `capture/ScreenCaptureService.kt`, `capture/ScreenCapture.kt`, `capture/ScreenCaptureConsentActivity.kt` | `mediaProjection` FGS in the main process (frames reach the IME without IPC). Downscaled VirtualDisplay, `CaptureGate` / `FrameThrottle` / `FrameSignature` decide what to analyse, `FrameRing` keeps ≤ 6 JPEG frames in RAM (30 s). Purges on secure fields, blocked apps and black frames. |
 | TTS | `agent/PlatformSpeech.kt` | Platform engine (offline once a voice is installed), released 90 s after speech ends. |
-| Companion | `companion/AgentKitPlugin.kt`, `MainActivity.kt` | Passes envelopes through to `:agent` and filters replies to its own requests. |
+| Companion | `companion/AgentKitPlugin.kt`, `MainActivity.kt` | Passes envelopes through to `:agent` as origin `companion`; `:agent` addresses replies and run events to the originating client only. Editor-only requests (`context.snapshot`, `context.scan`) are answered `unavailable`, never left to time out. |
 
 Part 2 ships `NoModelEngine`: every `agent.run` fails fast with `agent.error{code:"unavailable"}`. Part 3
 replaces it behind the `InferenceEngine` port. Scheduling, cancellation, streaming, policy and foreground
@@ -520,8 +528,9 @@ lifetime are already implemented and tested.
 | 0 | `EditorInfo` + text around cursor (≤ 2,000 chars) | ~0 | none (IME) |
 | 1 | Notification history for the current package/conversation | ~0 | Notification access |
 | 2 | Accessibility node tree → UI outline | ≤ 60 ms | Accessibility (read-only, disclosed) |
-| 3 | Screenshot → OCR | ≤ 400 ms | Accessibility (API 30+) or MediaProjection consent |
-| 4 | Screenshot crop → VLM caption/QA | 1–6 s | as above + vision model |
+| 3 | Live frame (MediaProjection, kept warm in RAM) → OCR in Part 3 | ~0 ms to fetch the frame; OCR ≤ 400 ms | MediaProjection consent, per session (ADR-0010) |
+| 4 | Frame crop → VLM caption/QA | 1–6 s | as above + vision model |
+| + | Scroll-and-read: rung 2 over up to 8 screens | ~300 ms per screen | Accessibility; started by a user tap (`play`) |
 
 The orchestrator climbs the ladder **only as far as the skill requires** (`Skill.contextNeeds`).
 

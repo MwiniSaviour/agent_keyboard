@@ -8,8 +8,12 @@ interface IAgentService {
     /** Protocol major spoken by this service; clients refuse to talk across majors. */
     int protocolVersion();
 
-    /** Deliver one shell envelope (command or request). Replies/events arrive via IAgentCallback. */
-    oneway void post(String envelopeJson);
+    /**
+     * Deliver one shell envelope (command or request). Replies/events arrive via IAgentCallback.
+     * [origin] is "ime" or "companion": replies and run events go back to that client only, and the
+     * focused-field gates apply to IME work only.
+     */
+    oneway void post(String envelopeJson, String origin);
 
     /** The IME saw new clipboard text (only the default IME may read the clipboard on Android 10+). */
     oneway void recordClipboard(String text, boolean sensitiveSource);
@@ -20,6 +24,12 @@ interface IAgentService {
     /** Append one autonomy audit record (FR-AU-06). The service owns the append-only table. */
     oneway void appendAudit(String auditJson);
 
-    void register(IAgentCallback callback);
+    /**
+     * Autopilot's RemoteInput send path (SPEC §11.6.3 strategy 3) for a field that can't send itself.
+     * :agent re-checks consent and the conversation; the outcome arrives as onRemoteReplyResult.
+     */
+    oneway void remoteReply(String requestId, String conversationKey, String text);
+
+    void register(IAgentCallback callback, String origin);
     void unregister(IAgentCallback callback);
 }

@@ -115,6 +115,25 @@ await sleep(150);
 t = await composerText();
 check('apply reply replaces field', t.length > 10 && !t.includes('Hi there'), JSON.stringify(t));
 
+// Live screen + scroll-and-read (ADR-0010): the web mock stands in for MediaProjection and a11y scrolling
+await page.click('[aria-label="Screen context and actions"]');
+await sleep(300);
+await clickText('button', 'Read earlier messages');
+await sleep(400);
+const scanned = await page.$eval('[class*="ctxSummary"]', (e) => e.textContent).catch(() => '');
+const earlier = await page.$eval('[class*="ctxQuote"]', (e) => e.textContent).catch(() => '');
+check('scroll-and-read', /screens? read/.test(scanned) && /messages/.test(earlier), JSON.stringify(scanned + ' | ' + earlier));
+await clickText('button', 'Turn on live screen');
+await sleep(900);
+const frameShown = await page.$('[class*="ctxFrame"] img').then((e) => !!e);
+const liveBadge = await page.$('[aria-label$="Live screen is on"]').then((e) => !!e);
+check('live screen frame + LIVE badge', frameShown && liveBadge, `frame=${frameShown} badge=${liveBadge}`);
+await page.screenshot({ path: `${shots}/04a-lens-live.png` });
+await clickText('button', 'Stop live screen');
+await sleep(200);
+await page.click('[aria-label="Close"]');
+await sleep(200);
+
 // autonomy — switch to Sales Bot (ceiling: auto)
 await page.click('[aria-label^="Active agent"]');
 await sleep(200);

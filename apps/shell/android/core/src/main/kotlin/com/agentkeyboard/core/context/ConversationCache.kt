@@ -72,16 +72,50 @@ class ConversationCache(
     @Synchronized
     fun get(key: String): Conversation? = map[key]?.takeIf { clock() - it.updatedAt < ttlMs }
 
-    /** Best match for the focused app: the most recently updated conversation of that package. */
+    /** The most recently updated conversation of that package. Prefer [resolve]: it may be another chat. */
     @Synchronized
     fun latestFor(packageName: String): Conversation? =
         map.values.filter { it.packageName == packageName && clock() - it.updatedAt < ttlMs }.maxByOrNull { it.updatedAt }
+
+    /** [conversation] plus how sure we are it is the chat on screen (`ScreenContext.chat.match`). */
+    data class Resolution(val conversation: Conversation, val match: String) {
+        /** Safe to draft from: never put words into the wrong chat on a guess. */
+        val usableForDrafting: Boolean get() = match != com.agentkeyboard.core.protocol.ChatContext.UNCERTAIN
+    }
+
+    /**
+     * Which notification conversation the user is looking at. Notifications carry no window title, so:
+     *  - [titleHint] (read from the screen) matching a conversation title → `exact`;
+     *  - otherwise, the only conversation of the app active within [AMBIGUITY_WINDOW_MS] → `likely`;
+     *  - otherwise the latest one, flagged `uncertain`: fine to *show* with its title, not to draft from.
+     */
+    @Synchronized
+    fun resolve(packageName: String, titleHint: String?): Resolution? {
+        val now = clock()
+        val live = map.values.filter { it.packageName == packageName && now - it.updatedAt < ttlMs }
+        if (live.isEmpty()) return null
+        val hint = titleHint?.let(::normalizeTitle)?.takeIf { it.isNotEmpty() }
+        if (hint != null) {
+            live.firstOrNull { normalizeTitle(it.title) == hint }?.let { return Resolution(it, com.agentkeyboard.core.protocol.ChatContext.EXACT) }
+        }
+        val latest = live.maxByOrNull { it.updatedAt }!!
+        val recent = live.count { now - it.updatedAt < AMBIGUITY_WINDOW_MS }
+        // A hint that matches nothing means the screen shows a chat we have no notifications for.
+        val match = if (hint == null && recent <= 1) com.agentkeyboard.core.protocol.ChatContext.LIKELY else com.agentkeyboard.core.protocol.ChatContext.UNCERTAIN
+        return Resolution(latest, match)
+    }
 
     @Synchronized
     fun clear() = map.clear()
 
     companion object {
         const val MAX_MESSAGE_CHARS = 2_000
+        const val AMBIGUITY_WINDOW_MS = 15 * 60 * 1000L
+
+        /** Titles differ in case, spacing and decoration (\u202A bidi marks, emoji badges) between sources. */
+        fun normalizeTitle(t: String): String =
+            t.filter { it.isLetterOrDigit() || it.isWhitespace() }.trim().lowercase().replace(Regex("\\s+"), " ")
+
         fun keyOf(packageName: String, title: String) = "$packageName|${title.trim().lowercase()}"
     }
 }

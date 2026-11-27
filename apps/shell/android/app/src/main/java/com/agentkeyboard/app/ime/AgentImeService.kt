@@ -9,13 +9,16 @@ import android.inputmethodservice.InputMethodService
 import android.media.AudioManager
 import android.os.Build
 import android.os.SystemClock
+import android.text.InputType
 import android.view.Choreographer
 import android.view.HapticFeedbackConstants
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
 import android.widget.FrameLayout
 import com.agentkeyboard.app.AkLog
+import com.agentkeyboard.app.capture.ScreenCapture
 import com.agentkeyboard.core.editor.EditOp
 import com.agentkeyboard.core.editor.EditorInfoSnapshot
 import com.agentkeyboard.core.editor.FieldClassification
@@ -80,7 +83,7 @@ class AgentImeService : InputMethodService(), ImeController.ImeHost, ImeWebView.
     }
 
     override fun onCreateInputView(): View {
-        val root = container ?: FrameLayout(this).also { container = it }
+        val root = container ?: newContainer().also { container = it }
         (root.parent as? ViewGroup)?.removeView(root)
         root.removeAllViews()
         val fb = FallbackKeyboardView(this, this).also { fallback = it }
@@ -95,6 +98,26 @@ class AgentImeService : InputMethodService(), ImeController.ImeHost, ImeWebView.
         applyVisibility()
         return root
     }
+
+    /**
+     * Root of the input view. Records finger-downs on our own keyboard (the proof that a
+     * `context.scan` was started by the user, ADR-0010) and reports the keyboard's top edge so live
+     * capture crops our keyboard out of every frame.
+     */
+    private fun newContainer() = object : FrameLayout(this) {
+        override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+            if (ev.actionMasked == MotionEvent.ACTION_DOWN) lastTouchAt = ev.eventTime
+            return super.dispatchTouchEvent(ev)
+        }
+    }.apply {
+        addOnLayoutChangeListener { v, _, _, _, _, _, _, _, _ ->
+            val loc = IntArray(2)
+            v.getLocationOnScreen(loc)
+            ScreenCapture.keyboardTopPx = loc[1].takeIf { v.isShown && it > 0 }
+        }
+    }
+
+    private var lastTouchAt = 0L
 
     override fun onEvaluateFullscreenMode(): Boolean = false
 
@@ -118,6 +141,7 @@ class AgentImeService : InputMethodService(), ImeController.ImeHost, ImeWebView.
     override fun onFinishInputView(finishingInput: Boolean) {
         super.onFinishInputView(finishingInput)
         web.onHidden()
+        ScreenCapture.keyboardTopPx = null
         controller.onFieldFinished()
     }
 
@@ -132,6 +156,7 @@ class AgentImeService : InputMethodService(), ImeController.ImeHost, ImeWebView.
         selStart = newSelStart
         selEnd = newSelEnd
         scheduleEditorState()
+        fallback?.takeIf { it.visibility == View.VISIBLE }?.refreshAutoCaps()
     }
 
     override fun onComputeInsets(outInsets: Insets) {
@@ -183,7 +208,9 @@ class AgentImeService : InputMethodService(), ImeController.ImeHost, ImeWebView.
     override fun keyFeedback(kind: String, haptic: Boolean, sound: Boolean) {
         if (haptic) container?.performHapticFeedback(if (kind == "tap") HapticFeedbackConstants.KEYBOARD_TAP else HapticFeedbackConstants.VIRTUAL_KEY)
         if (!sound) return
-        // Note: the platform plays these only when system "Touch sounds" is on.
+        // The two-argument playSoundEffect plays regardless of the system "Touch sounds" setting (AOSP
+        // AudioService only checks that setting for the one-argument form): the user's keyboard
+        // "Sound on keypress" switch is the control. -1f = the platform's default effect volume.
         val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
         am.playSoundEffect(
             when (kind) {
@@ -231,6 +258,8 @@ class AgentImeService : InputMethodService(), ImeController.ImeHost, ImeWebView.
         web.post(raw)
     }
 
+    override fun lastUserTouchAt(): Long = lastTouchAt
+
     // ───────────── ImeWebView.Listener ─────────────
 
     override fun onShellMessage(raw: String) = controller.router.receive(raw)
@@ -275,6 +304,13 @@ class AgentImeService : InputMethodService(), ImeController.ImeHost, ImeWebView.
     override fun onFallbackEnter() = executor.submit(EditOp.Action(classification?.context?.imeAction ?: ImeActionKind.NEWLINE))
     override fun onFallbackSwitchKeyboard() = switchToNextKeyboard()
     override fun onFallbackFeedback(kind: String) = controller.keyFeedback(kind)
+    override fun fallbackShouldCapitalize(): Boolean {
+        if (classification?.context?.sensitive != false) return false
+        val info = currentInputEditorInfo ?: return false
+        if (info.inputType and InputType.TYPE_MASK_CLASS != InputType.TYPE_CLASS_TEXT) return false
+        // The field's own caps flags (sentences/words/characters) decide, as for any IME.
+        return (currentInputConnection?.getCursorCapsMode(info.inputType) ?: 0) != 0
+    }
 
     // ───────────── internals ─────────────
 

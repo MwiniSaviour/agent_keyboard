@@ -119,11 +119,14 @@ data class Capabilities(
     val screenContext: Boolean,
     val visualContext: Boolean,
     val autonomy: Boolean,
+    val screenCapture: Boolean,
+    val screenScan: Boolean,
 ) : JsonEncodable {
     override fun toJson(): JsonObj = obj(
         "protocol" to protocol, "platform" to platform, "tier" to tier.wire,
         "nativeSuggestions" to nativeSuggestions, "voice" to voice, "tts" to tts,
         "screenContext" to screenContext, "visualContext" to visualContext, "autonomy" to autonomy,
+        "screenCapture" to screenCapture, "screenScan" to screenScan,
     )
 }
 
@@ -136,11 +139,13 @@ data class SystemStatus(
     val tier: DeviceTier,
     val totalRamMb: Int,
     val modelsInstalled: Boolean,
+    val autonomyConsent: Boolean = false,
 ) : JsonEncodable {
     override fun toJson(): JsonObj = obj(
         "imeEnabled" to imeEnabled, "imeSelected" to imeSelected,
         "notificationAccess" to notificationAccess, "screenReading" to screenReading,
         "flavor" to flavor, "tier" to tier.wire, "totalRamMb" to totalRamMb, "modelsInstalled" to modelsInstalled,
+        "autonomyConsent" to autonomyConsent,
     )
 }
 
@@ -284,16 +289,44 @@ data class ChatMessage(val id: String, val fromMe: Boolean, val author: String, 
     override fun toJson(): JsonObj = obj("id" to id, "from" to if (fromMe) "me" else "them", "author" to author, "text" to text, "at" to at)
 }
 
-/** Subset of `ScreenContext` that Part 2 can produce (rungs 0–2). Visual rungs arrive in Part 3. */
+/** `ScreenContext.chat`. [match] says how sure the host is that this is the chat on screen. */
+data class ChatContext(
+    val title: String,
+    val participants: List<String>,
+    val messages: List<ChatMessage>,
+    val match: String? = null,
+) : JsonEncodable {
+    override fun toJson(): JsonObj = obj("title" to title, "participants" to participants, "messages" to arr(messages), "match" to match)
+
+    companion object {
+        const val EXACT = "exact"
+        const val LIKELY = "likely"
+        const val UNCERTAIN = "uncertain"
+    }
+}
+
+/** An in-memory frame reference (rung 3). [preview] is a small data: URL for the Lens panel. */
+data class ScreenImage(val handle: String, val width: Int? = null, val height: Int? = null, val preview: String? = null, val caption: String? = null) : JsonEncodable {
+    override fun toJson(): JsonObj = obj("handle" to handle, "caption" to caption, "width" to width, "height" to height, "preview" to preview)
+}
+
+data class ScanInfo(val pages: Int, val complete: Boolean, val restored: Boolean) : JsonEncodable {
+    override fun toJson(): JsonObj = obj("pages" to pages, "complete" to complete, "restored" to restored)
+}
+
+/** What the native hosts produce of `ScreenContext` (rungs 0–3; OCR/VLM fill captions in Part 3). */
 data class ScreenContext(
     val appPackage: String,
     val appLabel: String,
     val category: String,
     val screenType: String,
     val field: FieldContext,
-    val chat: Triple<String, List<String>, List<ChatMessage>>? = null,
+    val chat: ChatContext? = null,
     val text: String? = null,
+    val textTitle: String? = null,
+    val images: List<ScreenImage> = emptyList(),
     val sensitivity: SensitivityFlags,
+    val scan: ScanInfo? = null,
     val rung: Int,
     val capturedAt: Long,
     val ttlMs: Long,
@@ -302,9 +335,11 @@ data class ScreenContext(
         "app" to obj("package" to appPackage, "label" to appLabel, "category" to category),
         "screenType" to screenType,
         "field" to field,
-        "chat" to chat?.let { (title, people, msgs) -> obj("title" to title, "participants" to people, "messages" to arr(msgs)) },
-        "text" to text?.let { obj("body" to it) },
+        "chat" to chat,
+        "text" to text?.let { obj("title" to textTitle, "body" to it) },
+        "images" to images.takeIf { it.isNotEmpty() }?.let { arr(it) },
         "sensitivity" to sensitivity,
+        "scan" to scan,
         "rung" to rung,
         "capturedAt" to capturedAt,
         "ttlMs" to ttlMs,

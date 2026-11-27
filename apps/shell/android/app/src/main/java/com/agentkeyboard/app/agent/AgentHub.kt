@@ -8,6 +8,7 @@ import android.os.RemoteCallbackList
 import android.os.RemoteException
 import com.agentkeyboard.app.Ak
 import com.agentkeyboard.app.AkLog
+import com.agentkeyboard.app.notify.AkNotificationListener
 import com.agentkeyboard.app.storage.AkDatabase
 import com.agentkeyboard.app.storage.SqlAgentStore
 import com.agentkeyboard.app.storage.SqlAuditStore
@@ -42,6 +43,10 @@ object AgentHub {
     /** Set by `AgentService` while it exists; receives foreground on/off on the main thread. */
     @Volatile var foreground: ((Boolean) -> Unit)? = null
 
+    /** Latest busy state (main thread): lets a late `onStartCommand` demote a run that already ended. */
+    @Volatile var busy: Boolean = false
+        private set
+
     private var runtime: AgentRuntime? = null // ak-agent thread only
     private var speech: PlatformSpeech? = null
 
@@ -72,9 +77,11 @@ object AgentHub {
         val db = AkDatabase.open(ctx).writableDatabase
         val sp = PlatformSpeech(ctx, handler).also { speech = it }
         val output = object : AgentOutput {
-            override fun envelope(raw: String) = broadcast { it.onEnvelope(raw) }
+            override fun envelope(raw: String, to: String?) = broadcast(to) { it.onEnvelope(raw) }
             override fun inbound(packageName: String, conversationKey: String, messageJson: String, remoteInputAvailable: Boolean) =
-                broadcast { it.onInbound(packageName, conversationKey, messageJson, remoteInputAvailable) }
+                broadcast(AgentRuntime.ORIGIN_IME) { it.onInbound(packageName, conversationKey, messageJson, remoteInputAvailable) }
+            override fun remoteReplyResult(requestId: String, ok: Boolean) =
+                broadcast(AgentRuntime.ORIGIN_IME) { it.onRemoteReplyResult(requestId, ok) }
         }
         return AgentRuntime(
             agents = SqlAgentStore(db),
@@ -89,6 +96,7 @@ object AgentHub {
             serial = serial,
             onBusyChanged = { busy ->
                 main.post {
+                    this.busy = busy
                     val service = foreground
                     when {
                         service != null -> service(busy)
@@ -97,17 +105,22 @@ object AgentHub {
                 }
             },
             log = AkLog::d,
+            replies = { key, text -> AkNotificationListener.replyVia(ctx, key, text) },
         ).also {
             it.start()
             AkLog.i("agent runtime ready in ${(System.nanoTime() - t0) / 1_000_000} ms")
         }
     }
 
-    /** Callbacks are `oneway`, so a slow or dead IME can never stall this thread. */
-    private inline fun broadcast(crossinline send: (IAgentCallback) -> Unit) {
+    /**
+     * Callbacks are `oneway`, so a slow or dead IME can never stall this thread. [to] = one client
+     * origin (the registration cookie); null = every client.
+     */
+    private inline fun broadcast(to: String?, crossinline send: (IAgentCallback) -> Unit) {
         val n = callbacks.beginBroadcast()
         try {
             for (i in 0 until n) {
+                if (to != null && callbacks.getBroadcastCookie(i) != to) continue
                 try {
                     send(callbacks.getBroadcastItem(i))
                 } catch (_: RemoteException) {

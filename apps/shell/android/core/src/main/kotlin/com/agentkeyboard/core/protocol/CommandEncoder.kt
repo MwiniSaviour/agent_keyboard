@@ -34,6 +34,7 @@ object CommandEncoder {
         is Command.AgentsDelete -> "agents.delete"
         is Command.SystemOpen -> "system.open"
         is Command.Resize -> "ui.resize"
+        is Command.ScreenCapture -> "screen.capture"
     }
 
     fun encode(c: Command): JsonValue = when (c) {
@@ -59,5 +60,6 @@ object CommandEncoder {
         is Command.AgentsDelete -> obj("id" to c.id)
         is Command.SystemOpen -> obj("target" to c.target.wire)
         is Command.Resize -> obj("height" to c.heightDp)
+        is Command.ScreenCapture -> obj("enabled" to c.enabled)
     }
 }

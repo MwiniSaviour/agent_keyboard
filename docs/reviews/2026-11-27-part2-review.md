@@ -39,19 +39,41 @@ common path, **Low** means an edge case, polish or a documentation gap.
 | 18 | Low | Repo hygiene | `apps/shell/src/build/csp.test.ts` was never committed: the `build/` ignore rule matched it. | **Fixed.** Moved to `src/security/`. |
 | 19 | Low | Docs | Stale "API 24 = our minSdk" comment. `editor.cursor` units were undocumented. The autonomy `data.confidence` convention was undocumented. | **Fixed.** |
 
-## Open items (not changed here)
+## Open items
 
 | # | Area | Item | Proposed handling |
 |---|---|---|---|
-| A | Context (§10.1) | Rung 1 answers with the **most recently updated** conversation of the focused app (`ConversationCache.latestFor`). That may not be the chat on screen. | Part 3: match on the a11y/visual title when available. Otherwise show the source ("From notification · Ama") in the context chip and require the user to confirm before replying. |
-| B | Accessibility | The native fallback keyboard exposes no virtual view tree, so TalkBack cannot explore its keys. | Add `ExploreByTouchHelper` (androidx.customview) before release. |
-| C | Consent (FR-AU-02) | There is no revoke path: the shell only ever sends `autonomy.consent = true`, and it re-sends on every enable, which adds a `consent_granted` audit row each time. | A companion "Revoke consent" control sends `false`. Send `true` only from the consent flow, and audit only changes. |
-| D | Policy | `:agent` keeps one focused field for all clients. A companion-initiated run after the IME's last field was a password field is refused. | Scope the focus gate to IME-originated runs. |
-| E | Sound | Platform key clicks play only when system "Touch sounds" is on. | Accept, or use SoundPool with bundled clicks if the in-app toggle should be authoritative. |
-| F | Notifications | Reply actions are not dropped on `onNotificationRemoved`. They expire naturally (32-entry LRU, `CanceledException`). | Drop them on removal in Part 3, together with background replies. |
-| G | Verification | Nothing here has run on a device or under Gradle. Lifecycle ordering, WebView theming, Keystore behaviour and OEM quirks are reasoned from the API docs only. | First device pass: the J1–J6 journeys plus a cold-start trace for NFR-P-03/06. |
+| G | Verification | Nothing here has run on a device or under Gradle. Lifecycle ordering, WebView theming, Keystore behaviour, MediaProjection timing, scroll restoration and OEM quirks are reasoned from the API docs only. | First device pass: the J1–J6 journeys, a cold-start trace for NFR-P-03/06, and the ADR-0010 checks (frame cadence, secure-window purge, scan restore on reversed chat lists). |
+
+## Second pass: open items A–F, remaining findings, live screen (ADR-0010)
+
+All of these were confirmed in code first. Pure logic has tests; Android classes are type-checked
+with `-Werror` for both flavors.
+
+| # | Item | Resolution |
+|---|---|---|
+| A | Rung 1 answered with the most recent chat of the app, which may not be the one on screen. | `ConversationCache.resolve(pkg, titleHint)` matches the title the IME read on screen and reports `chat.match` (`exact`, `likely` or `uncertain`). Runs draft only from a usable match. The IME attaches the title and screen text to `agent.run` and strips any shell-supplied values. The Lens panel says "may be another chat" when unsure. 2 tests. |
+| B | TalkBack couldn't explore the fallback keyboard. | Platform `AccessibilityNodeProvider` (no androidx dependency). Every key is a virtual view with a spoken label: 🌐 → "Next keyboard", shift and caps-lock state, punctuation names. Explore-by-touch with lift-to-type, plus `ACTION_CLICK`. API 29 uses the node pool. |
+| C | No way to revoke consent; consent re-sent on every enable and audited each time. | Settings → Privacy → "Withdraw Autopilot consent". The shell sends `true` only from the consent sheet. `:agent` and the IME write and audit only on change. `autonomy.phase.consent` and `SystemStatus.autonomyConsent` let the keyboard follow the native record, which is re-checked when Autopilot is switched on. Tests in core and shell. |
+| D | One focused field shared by all clients. | The focus gate applies only to IME-origin work. AIDL now carries the client origin (`post(env, origin)`, `register(cb, origin)`), and replies and run events go only to the client that asked. Tested. |
+| E | Key sounds needed system "Touch sounds". | Not true for the API we use: AOSP checks that setting only for one-argument `playSoundEffect`. We call `playSoundEffect(fx, -1f)`, so the keyboard toggle is authoritative. The misleading comment is fixed. |
+| F | Reply actions kept after the notification was removed. | `onNotificationRemoved` drops the conversation's reply action. Messages with no per-message time use the post time instead of 0. |
+| F1 | Shell cursor moved by UTF-16 units. | `moveCursor` steps by grapheme, matching native DPAD moves. Tested. |
+| F8 | Autonomy confidence parsed only from strings. | `AgentRuntime.confidenceOf` takes a string or number; anything else gives 0.0, so the run escalates. The IME uses it. Tested. |
+| F9 | `remoteInputAvailable` was hardcoded false. | Tracked per conversation from inbound messages. Send strategy 3 goes through `IAgentService.remoteReply`; `:agent` re-checks consent and the conversation, and the field is cleared on success. |
+| F10 | Events emitted before `hello` were lost. | `BridgeRouter` buffers up to 64 events and flushes them after `hello`, dropping state that `hello` replays anyway. Tested. |
+| F12 | Fallback keyboard: no auto-capitalisation or caps lock; colours drifted from §7.4. | Auto-caps via `getCursorCapsMode` (the field's own flags), double-tap caps lock, and exact §7.4 tokens including the light key shadow. |
+| F13 | IME header CSP lacked `font-src`; one shared `BLOCKED` response stream. | Added `font-src 'self' data:`. Each blocked request gets a fresh response. |
+| F15 | FGS promote/demote race: a run ending before `onStartCommand` left `:agent` in the foreground. | `onStartCommand` promotes (mandatory) and then demotes at once if `AgentHub.busy` is false. |
+| F17 | Companion swallowed editor-only requests, so they timed out after 5 s; its pending set evicted at random. | `context.snapshot` and `context.scan` are answered `unavailable`. `pending` is a `LinkedHashSet`. |
+| F18 | `SystemSettings.open` could crash on OEM builds. | Catches `ActivityNotFoundException` and falls back to top-level Settings. |
+| F20 | `AgentClient` replayed stale queued calls after a reconnect and hung on a version mismatch. | On loss or mismatch the queue is drained and callers fail now. A mismatch doesn't retry. |
+| F21 | Accessibility nodes not recycled before API 33; screen-read messages had `at = 0`. | Nodes are released after use on API < 33. Messages carry the read time. |
+| New | Real-time screen pixels and scrolling (Cluely case study). | ADR-0010: MediaProjection live screen (user-started, purged on secure fields, blocked apps and black frames, RAM-only ring, LIVE badge and frame in Lens) and `context.scan` scroll-and-read (user tap only in `play`). New `screen.capture` / `context.scan` / `screen.state` messages and Capabilities `screenCapture` / `screenScan`. 19 new JVM tests, 3 controller tests, 2 E2E checks. |
 
 ## Verification after fixes
+
+First pass (`c0659f6`):
 
 | Check | Result |
 |---|---|
@@ -59,3 +81,13 @@ common path, **Low** means an edge case, polish or a documentation gap.
 | `tools/verify-app.sh` | play and full: 0 errors, 0 warnings (`-Werror`), manifests 6/6 |
 | `npm run check` | engine 40, protocol 3, shell 40 tests; typecheck and builds green |
 | E2E smoke / CSP probe | 17/17 · 3/3 pages, 0 violations |
+
+Second pass:
+
+| Check | Result |
+|---|---|
+| `tools/verify-core.sh` | 134/134 JVM tests, AndroidConst parity 34/34, schema v1 OK |
+| `tools/verify-app.sh` | play and full: 0 errors, 0 warnings (`-Werror`), 21 files, manifests 8/8 |
+| `npm run check` | engine 41, protocol 3, shell 43 tests; typecheck and builds green |
+| `/ime` size | 192.9 KB gzip total, 22.3 KB app (budget 210 / 40) |
+| E2E smoke / CSP probe | 19/19 (adds scroll-and-read and live screen), 0 console errors · 3/3 pages, 0 violations |

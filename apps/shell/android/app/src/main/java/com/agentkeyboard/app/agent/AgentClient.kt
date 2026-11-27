@@ -23,10 +23,16 @@ import com.agentkeyboard.core.protocol.PROTOCOL_VERSION
  *    shell's 5 s timeout.
  *  - Callbacks are delivered on the main thread.
  */
-class AgentClient(private val context: Context, private val listener: Listener) {
+class AgentClient(private val context: Context, private val listener: Listener, private val origin: String) {
     interface Listener {
         fun onAgentEnvelope(raw: String)
         fun onAgentInbound(packageName: String, conversationKey: String, messageJson: String, remoteInputAvailable: Boolean)
+        fun onAgentRemoteReplyResult(requestId: String, ok: Boolean) {}
+
+        /**
+         * The link dropped, or `:agent` speaks another protocol major. Everything waiting on it has
+         * been discarded: callers must fail their pending requests now instead of waiting for timeouts.
+         */
         fun onAgentUnavailable(queued: List<String>) {}
     }
 
@@ -56,6 +62,10 @@ class AgentClient(private val context: Context, private val listener: Listener) 
         override fun onInbound(packageName: String, conversationKey: String, messageJson: String, remoteInputAvailable: Boolean) {
             main.post { listener.onAgentInbound(packageName, conversationKey, messageJson, remoteInputAvailable) }
         }
+
+        override fun onRemoteReplyResult(requestId: String, ok: Boolean) {
+            main.post { listener.onAgentRemoteReplyResult(requestId, ok) }
+        }
     }
 
     private val connection = object : ServiceConnection {
@@ -63,9 +73,11 @@ class AgentClient(private val context: Context, private val listener: Listener) 
             val s = IAgentService.Stub.asInterface(binder)
             try {
                 if (s.protocolVersion() != PROTOCOL_VERSION) {
-                    AkLog.w("agent protocol mismatch"); unbindQuietly(); return
+                    // Can't happen within one APK, but if it ever does: fail everything now and stop
+                    // retrying (a rebind would meet the same service) rather than letting requests hang.
+                    AkLog.w("agent protocol mismatch"); unbindQuietly(); drain(); return
                 }
-                s.register(callback)
+                s.register(callback, origin)
                 lastFocus?.let(s::focusChanged)
             } catch (e: RemoteException) {
                 onLost(); return
@@ -89,7 +101,9 @@ class AgentClient(private val context: Context, private val listener: Listener) 
 
     val isConnected: Boolean get() = service != null
 
-    fun post(envelopeJson: String) = call { it.post(envelopeJson) }
+    fun post(envelopeJson: String) = call { it.post(envelopeJson, origin) }
+
+    fun remoteReply(requestId: String, conversationKey: String, text: String) = call { it.remoteReply(requestId, conversationKey, text) }
 
     fun recordClipboard(text: String, sensitiveSource: Boolean) = call { it.recordClipboard(text, sensitiveSource) }
 
@@ -139,8 +153,17 @@ class AgentClient(private val context: Context, private val listener: Listener) 
         service = null
         binding = false
         if (hadService) AkLog.w("agent process disconnected")
-        listener.onAgentUnavailable(emptyList())
+        drain()
         scheduleRebind()
+    }
+
+    /**
+     * Queued calls are dropped, not replayed after a reconnect: their requests are failed right now,
+     * and replaying a stale `agent.run` minutes later would surprise the user.
+     */
+    private fun drain() {
+        queue.clear()
+        listener.onAgentUnavailable(emptyList())
     }
 
     private fun scheduleRebind() {

@@ -4,7 +4,7 @@
  *  - the shell's optimistic editor mirror, reconciled on every native `editor.state` (SPEC §7.3.5).
  */
 import type { EditorState } from '@ak/protocol';
-import { currentWord } from './text';
+import { currentWord, firstGraphemeLength, lastGraphemeLength } from './text';
 
 export const EMPTY_EDITOR: EditorState = Object.freeze({ before: '', after: '', selected: '' });
 
@@ -74,11 +74,37 @@ export function replaceText(s: EditorState, scope: 'selection' | 'field' | 'word
   }
 }
 
-/** Move a collapsed cursor by `delta` code units (clamped). */
+/**
+ * Move a collapsed cursor by `delta` grapheme clusters (clamped), matching the wire unit of
+ * `editor.cursor`: Android applies one D-pad step per unit, and a D-pad step never lands inside a
+ * surrogate pair or an emoji ZWJ sequence. A selection collapses first (to its start when moving left,
+ * its end when moving right), like a D-pad press, and that collapse counts as one step.
+ */
 export function moveCursor(s: EditorState, delta: number): EditorState {
-  const text = s.before + s.selected + s.after;
-  const pos = Math.max(0, Math.min(text.length, s.before.length + delta));
-  return { before: text.slice(0, pos), after: text.slice(pos), selected: '' };
+  let before = s.before;
+  let after = s.after;
+  let steps = Math.trunc(Math.abs(delta));
+  if (s.selected && steps > 0) {
+    if (delta < 0) after = s.selected + after;
+    else before = before + s.selected;
+    steps--;
+  } else if (s.selected) {
+    before += s.selected;
+  }
+  for (; steps > 0; steps--) {
+    if (delta < 0) {
+      const n = lastGraphemeLength(before);
+      if (n === 0) break;
+      after = before.slice(-n) + after;
+      before = before.slice(0, -n);
+    } else {
+      const n = firstGraphemeLength(after);
+      if (n === 0) break;
+      before += after.slice(0, n);
+      after = after.slice(n);
+    }
+  }
+  return { before, after, selected: '' };
 }
 
 export function fullText(s: EditorState): string {

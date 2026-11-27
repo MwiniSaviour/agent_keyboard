@@ -1,5 +1,6 @@
 'use client';
 /** Full settings (FR-KB-09 + privacy controls, SPEC §16). */
+import { useState } from 'react';
 import { updateSetting, useSetting, type KeyboardHeight, type KeyboardSettings } from '@/lib/settings';
 import { CompanionShell } from './CompanionShell';
 import css from './companion.module.css';
@@ -29,6 +30,7 @@ function Body() {
   const theme = useSetting('theme');
   const height = useSetting('height');
   const longPress = useSetting('longPressMs');
+  const [withdrawn, setWithdrawn] = useState(false);
 
   const wipe = () => {
     if (!confirm('Delete everything the keyboard has learned on this device? Agents are kept.')) return;
@@ -40,6 +42,25 @@ function Body() {
       /* ignore */
     }
     location.reload();
+  };
+
+  // FR-AU-02: consent must be as easy to withdraw as to give. The native record (AgentRuntime) is
+  // the source of truth; the keyboard picks the withdrawal up from `autonomy.phase`/`system.status`.
+  const withdraw = async () => {
+    if (!confirm('Withdraw Autopilot consent? Autopilot turns off and will ask again before it can be used.')) return;
+    try {
+      localStorage.removeItem('ak.autonomy.consent.v1');
+    } catch {
+      /* ignore */
+    }
+    try {
+      const { loadBridge } = await import('@/bridge');
+      const bridge = await loadBridge();
+      bridge.send('settings.set', { key: 'autonomy.consent', value: false });
+    } catch {
+      /* no host reachable: the local record is cleared, native refuses to arm without its own */
+    }
+    setWithdrawn(true);
   };
 
   return (
@@ -104,6 +125,15 @@ function Body() {
           </span>
           <button type="button" className={css.danger} style={{ height: 38 }} onClick={wipe}>
             Delete
+          </button>
+        </div>
+        <div className={css.setRow}>
+          <span>
+            Withdraw Autopilot consent
+            <div className={css.muted}>{withdrawn ? 'Withdrawn. Autopilot will ask again.' : 'Turns Autopilot off until you agree again'}</div>
+          </span>
+          <button type="button" className={css.danger} style={{ height: 38 }} onClick={() => void withdraw()} disabled={withdrawn}>
+            Withdraw
           </button>
         </div>
       </section>

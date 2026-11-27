@@ -121,17 +121,43 @@ class BridgeRouter(
             host.onRejected(env.type, ErrorCode.INTERNAL)
             reply.fail(ErrorCode.INTERNAL, "internal error")
         }
+        // Events held back while the page was loading go out after the hello reply and its replay.
+        if (req is Request.Hello) flushEarly()
     }
 
-    /** Push a native event. Unknown types are a programming error and fail fast in tests. */
+    /** Events that arrived before `hello`, oldest first (bounded; see [emit]). */
+    private val early = ArrayDeque<Envelope>()
+
+    /**
+     * Push a native event. Unknown types are a programming error and fail fast in tests.
+     *
+     * Before the shell's `hello` the page may not be listening yet, so an event posted now could be
+     * lost (e.g. an `agent.done` that lands while the renderer restarts). State the `hello` handler
+     * replays anyway ([REPLAYED_ON_HELLO]) is dropped; everything else is held (≤ [MAX_EARLY]) and
+     * delivered right after the `hello` reply.
+     */
     fun emit(type: String, payload: JsonValue) {
         require(type in Catalog.EVENTS) { "not a v1 event: $type" }
-        sendEnvelope(Envelope(PROTOCOL_VERSION, ids.next(), type, clock(), null, payload))
+        val env = Envelope(PROTOCOL_VERSION, ids.next(), type, clock(), null, payload)
+        if (shellReady) return sendEnvelope(env)
+        if (type in REPLAYED_ON_HELLO) return
+        if (early.size >= MAX_EARLY) early.removeFirst()
+        early.addLast(env)
+    }
+
+    private fun flushEarly() {
+        while (early.isNotEmpty()) sendEnvelope(early.removeFirst())
     }
 
     /** Called when the WebView renderer is recreated: the new page must say `hello` again. */
     fun reset() {
         shellReady = false
+    }
+
+    companion object {
+        /** The IME re-sends these from current state on every `hello` (editor binding, phase, theme). */
+        val REPLAYED_ON_HELLO = setOf("editor.start", "editor.state", "editor.finish", "autonomy.phase", "theme.update", "screen.state")
+        const val MAX_EARLY = 64
     }
 
     private fun errorEnvelope(re: String, code: ErrorCode, message: String) =

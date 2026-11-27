@@ -7,6 +7,7 @@ import com.agentkeyboard.core.json.JsonValue
 import com.agentkeyboard.core.json.arr
 import com.agentkeyboard.core.json.bool
 import com.agentkeyboard.core.json.long
+import com.agentkeyboard.core.json.num
 import com.agentkeyboard.core.json.obj
 import com.agentkeyboard.core.json.objOrNull
 import com.agentkeyboard.core.json.str
@@ -15,6 +16,8 @@ import com.agentkeyboard.core.protocol.AgentDefinition
 import com.agentkeyboard.core.protocol.AgentRunRequest
 import com.agentkeyboard.core.protocol.BridgeFailure
 import com.agentkeyboard.core.protocol.Catalog
+import com.agentkeyboard.core.json.JsonBool
+import com.agentkeyboard.core.protocol.ChatContext
 import com.agentkeyboard.core.protocol.ChatMessage
 import com.agentkeyboard.core.protocol.ClipboardItem
 import com.agentkeyboard.core.protocol.Command
@@ -58,13 +61,14 @@ class AgentRuntime(
     private val log: (String) -> Unit = {},
     private val clock: () -> Long = System::currentTimeMillis,
     val conversations: ConversationCache = ConversationCache(clock = clock),
+    private val replies: ReplyChannel? = null,
 ) {
     private val ids = IdGenerator("a")
     private var focused: FieldContext? = null
     private var active: ActiveRun? = null
     private var busy = false
 
-    private class ActiveRun(val request: AgentRunRequest, val startedAt: Long) {
+    private class ActiveRun(val request: AgentRunRequest, val startedAt: Long, val origin: String) {
         @Volatile var cancelled = false
         @Volatile var firstTokenAt = -1L
     }
@@ -86,25 +90,30 @@ class AgentRuntime(
 
     // ───────────────────────────── IME → :agent ─────────────────────────────
 
-    fun post(raw: String) {
+    /**
+     * One envelope from a client. [origin] is set by the binder front from the caller's registration
+     * (never from the payload): replies and run events go back to that client only, and the IME's
+     * focused-field gates apply only to IME-originated work (the companion has no focused field).
+     */
+    fun post(raw: String, origin: String = ORIGIN_IME) {
         val env = when (val d = EnvelopeCodec.decode(raw)) {
             is Decoded.Ok -> d.envelope
-            is Decoded.VersionMismatch -> return d.id?.let { replyError(it, ErrorCode.VERSION, "protocol v${d.version}") } ?: Unit
+            is Decoded.VersionMismatch -> return d.id?.let { replyError(it, ErrorCode.VERSION, "protocol v${d.version}", origin) } ?: Unit
             is Decoded.Malformed -> return log("malformed envelope: ${d.reason}")
         }
         try {
             when (env.type) {
-                in Catalog.REQUESTS -> onRequest(env, MessageDecoder.request(env.type, env.payload))
-                in Catalog.COMMANDS -> onCommand(MessageDecoder.command(env.type, env.payload))
+                in Catalog.REQUESTS -> onRequest(env, MessageDecoder.request(env.type, env.payload), origin)
+                in Catalog.COMMANDS -> onCommand(MessageDecoder.command(env.type, env.payload), origin)
                 else -> throw BridgeFailure(ErrorCode.UNKNOWN_TYPE, "unknown type '${env.type}'")
             }
         } catch (f: BridgeFailure) {
             log("rejected ${env.type}: ${f.code.wire}")
-            replyError(env.id, f.code, f.message ?: f.code.wire)
+            replyError(env.id, f.code, f.message ?: f.code.wire, origin)
         } catch (e: RuntimeException) {
             // Message text is never logged: it can echo user content.
             log("internal error on ${env.type}: ${e::class.java.simpleName}")
-            replyError(env.id, ErrorCode.INTERNAL, "Something went wrong")
+            replyError(env.id, ErrorCode.INTERNAL, "Something went wrong", origin)
         }
     }
 
@@ -155,7 +164,7 @@ class AgentRuntime(
 
     // ───────────────────────────── requests ─────────────────────────────
 
-    private fun onRequest(env: Envelope, request: Request) {
+    private fun onRequest(env: Envelope, request: Request, origin: String) {
         val result: JsonValue = when (request) {
             is Request.Hello -> throw BridgeFailure(ErrorCode.UNKNOWN_TYPE, "hello is answered by the IME")
             Request.AgentsList -> arr(sortedAgents())
@@ -163,27 +172,32 @@ class AgentRuntime(
                 purgeExpiredClips()
                 arr(clipboard.all().map { it.item }.sortedWith(compareByDescending<ClipboardItem> { it.pinned }.thenByDescending { it.at }))
             }
-            Request.SystemStatusRequest -> status().toJson()
-            is Request.ContextSnapshot -> snapshot(request.scope)
+            Request.SystemStatusRequest -> status().copy(autonomyConsent = autonomyConsented()).toJson()
+            is Request.ContextSnapshot -> if (origin == ORIGIN_IME) snapshot(request.scope, request.titleHint)
+            else throw BridgeFailure(ErrorCode.UNAVAILABLE, "No screen in the companion app")
+            is Request.ContextScan -> throw BridgeFailure(ErrorCode.UNAVAILABLE, "Screen scans run in the keyboard")
         }
-        emit("${env.type}.result", result, re = env.id)
+        emit("${env.type}.result", result, re = env.id, to = origin)
     }
 
     /**
-     * Rung 1 only: the IME answers rungs 0 and 2 itself and forwards here when accessibility is off.
-     * `unavailable` tells it to fall back to its local rung 0.
+     * Rung 1 only: the IME answers rungs 0, 2 and 3 itself and forwards here when accessibility is
+     * off. `unavailable` tells it to fall back to its local rung 0. The chat is resolved against the
+     * title the IME saw on screen ([titleHint]); without one the result says how sure it is
+     * (`chat.match`), so the Lens can show "latest notification" instead of pretending.
      */
-    private fun snapshot(scope: String): JsonValue {
-        if (scope == "visual") throw BridgeFailure(ErrorCode.UNAVAILABLE, "Visual context arrives with on-device vision models")
+    private fun snapshot(scope: String, titleHint: String?): JsonValue {
+        if (scope == "visual") throw BridgeFailure(ErrorCode.UNAVAILABLE, "Screen pixels are captured by the keyboard")
         val field = focused ?: throw BridgeFailure(ErrorCode.UNAVAILABLE, "No focused field")
         if (field.sensitive) throw BridgeFailure(ErrorCode.SECURE_FIELD, "Secure field")
         val pkg = field.packageName
         if (PrivacyFilter.isBlockedApp(pkg)) throw BridgeFailure(ErrorCode.UNAVAILABLE, "Blocked app")
-        val conv = conversations.latestFor(pkg) ?: throw BridgeFailure(ErrorCode.UNAVAILABLE, "No conversation captured")
+        val res = conversations.resolve(pkg, titleHint) ?: throw BridgeFailure(ErrorCode.UNAVAILABLE, "No conversation captured")
+        val conv = res.conversation
         val people = conv.messages.filter { !it.fromMe }.map { it.author }.distinct()
         return ScreenContext(
             appPackage = pkg, appLabel = field.appLabel, category = AppCategories.of(pkg), screenType = "chat",
-            field = field, chat = Triple(conv.title, people, conv.messages),
+            field = field, chat = ChatContext(conv.title, people, conv.messages, res.match),
             sensitivity = SensitivityFlags(secureWindow = false, sensitiveField = false, blockedApp = false),
             rung = 1, capturedAt = conv.updatedAt, ttlMs = SNAPSHOT_TTL_MS,
         ).toJson()
@@ -191,9 +205,9 @@ class AgentRuntime(
 
     // ───────────────────────────── commands ─────────────────────────────
 
-    private fun onCommand(command: Command) {
+    private fun onCommand(command: Command, origin: String) {
         when (command) {
-            is Command.AgentRun -> startRun(command.request)
+            is Command.AgentRun -> startRun(command.request, origin)
             is Command.AgentCancel -> active?.takeIf { it.request.runId == command.runId }?.let { cancel(it, "Cancelled") }
             is Command.TtsSpeak -> speech.speak(command.text.take(MAX_TTS_CHARS))
             Command.TtsStop -> speech.stop()
@@ -236,10 +250,27 @@ class AgentRuntime(
     }
 
     private fun setSetting(key: String, value: JsonValue) {
-        settings.put(key, value)
         if (key == KEY_CONSENT) {
-            audit.append(AuditRecord(clock(), if (value.bool() == true) "consent_granted" else "consent_revoked", null, null, null, null, null, null, null))
+            // Only real changes are audited: the shell re-syncs settings on every start.
+            val granted = value.bool() == true
+            val changed = granted != autonomyConsented()
+            settings.put(key, JsonBool(granted))
+            if (changed) audit.append(AuditRecord(clock(), if (granted) "consent_granted" else "consent_revoked", null, null, null, null, null, null, null))
+            return
         }
+        settings.put(key, value)
+    }
+
+    /**
+     * Foreground RemoteInput send for Autopilot (SPEC §11.6.3 strategy 3): the IME chose this path
+     * because the field itself can't send. Refused without consent, in blocked apps, and for
+     * conversations this process never saw (the key must come from an inbound message).
+     */
+    fun remoteReply(requestId: String, conversationKey: String, text: String) {
+        val conv = conversations.get(conversationKey)
+        val ok = replies != null && autonomyConsented() && conv != null && !PrivacyFilter.isBlockedApp(conv.packageName) &&
+            text.isNotBlank() && text.length <= MAX_TEXT_CHARS && replies.send(conversationKey, text)
+        output.remoteReplyResult(requestId, ok)
     }
 
     /** Background autonomy (FR-AU-09, Part 3) must check this before acting without the keyboard open. */
@@ -247,19 +278,20 @@ class AgentRuntime(
 
     // ───────────────────────────── runs ─────────────────────────────
 
-    private fun startRun(request: AgentRunRequest) {
+    private fun startRun(request: AgentRunRequest, origin: String) {
         val agent = agents.all().firstOrNull { it.id == request.agentId }
-            ?: return runError(request.runId, "policy", "This agent no longer exists.")
-        if (focused?.sensitive == true) return runError(request.runId, "policy", "AI is off in secure fields.")
+            ?: return runError(request.runId, "policy", "This agent no longer exists.", origin)
+        // The focused field belongs to the keyboard; a companion run (e.g. testing an agent) isn't typing into it.
+        val ime = origin == ORIGIN_IME
+        if (ime && focused?.sensitive == true) return runError(request.runId, "policy", "AI is off in secure fields.", origin)
         // One resident model (ADR-0004): the newest request wins; the user has moved on.
         // Hand over without releasing foreground: stopping and restarting the FGS between runs is
         // wasteful and can be refused from the background on Android 12+.
         active?.let { cancel(it, "Replaced by a newer request", release = false) }
-        val run = ActiveRun(request, clock())
+        val run = ActiveRun(request, clock(), origin)
         active = run
         updateBusy()
-        val pkg = focused?.packageName?.takeUnless(PrivacyFilter::isBlockedApp)
-        val job = InferenceJob(request, agent, RunContext(focused, pkg?.let(conversations::latestFor)))
+        val job = InferenceJob(request, agent, if (ime) imeContext(request) else RunContext(null, null))
         engineExecutor.execute {
             val outcome: Result<InferenceOutput> = try {
                 Result.success(
@@ -268,7 +300,7 @@ class AgentRuntime(
                         onToken = { delta ->
                             if (!run.cancelled && delta.isNotEmpty()) {
                                 if (run.firstTokenAt < 0) run.firstTokenAt = clock()
-                                serial.execute { if (active === run) emit("agent.token", obj("runId" to request.runId, "delta" to delta)) }
+                                serial.execute { if (active === run) emit("agent.token", obj("runId" to request.runId, "delta" to delta), to = run.origin) }
                             }
                         },
                         isCancelled = { run.cancelled },
@@ -299,20 +331,36 @@ class AgentRuntime(
                         "model" to engine.modelId,
                         "latencyMs" to obj("ttft" to ((if (run.firstTokenAt >= 0) run.firstTokenAt else now) - run.startedAt), "total" to (now - run.startedAt)),
                     ),
+                    to = run.origin,
                 )
             },
             onFailure = { e ->
                 val f = e as? EngineFailure ?: EngineFailure("internal", "The model failed. Try again.")
-                runError(req.runId, f.code, f.message ?: "error")
+                runError(req.runId, f.code, f.message ?: "error", run.origin)
             },
         )
+    }
+
+    /**
+     * Context for an IME run: rung-1 chat resolved against the title the IME read on screen
+     * (`params.conversationTitle`), plus the screen text the IME attached (`params.screen`). Both
+     * params are written by the IME itself, which strips any shell-provided values first.
+     */
+    private fun imeContext(request: AgentRunRequest): RunContext {
+        val pkg = focused?.packageName?.takeUnless(PrivacyFilter::isBlockedApp)
+        val p = request.params
+        val hint = p?.get("conversationTitle").str()
+        val conversation = pkg?.let { conversations.resolve(it, hint) }?.takeIf { it.usableForDrafting }?.conversation
+        val screen = p?.get("screen").objOrNull()
+        val text = screen?.get("text").str()?.take(MAX_SCREEN_CHARS)?.let(PrivacyFilter::redact)?.takeIf { pkg != null && it.isNotBlank() }
+        return RunContext(focused, conversation, text, text?.let { screen?.get("source").str() })
     }
 
     private fun cancel(run: ActiveRun, message: String, release: Boolean = true) {
         run.cancelled = true
         if (active === run) active = null
         if (release) updateBusy()
-        runError(run.request.runId, "cancelled", message)
+        runError(run.request.runId, "cancelled", message, run.origin)
     }
 
     private fun updateBusy() {
@@ -323,8 +371,8 @@ class AgentRuntime(
         }
     }
 
-    private fun runError(runId: String, code: String, message: String) =
-        emit("agent.error", obj("runId" to runId, "code" to code, "message" to message))
+    private fun runError(runId: String, code: String, message: String, to: String?) =
+        emit("agent.error", obj("runId" to runId, "code" to code, "message" to message), to = to)
 
     // ───────────────────────────── helpers ─────────────────────────────
 
@@ -339,12 +387,13 @@ class AgentRuntime(
 
     private fun newClipId(): String = "c_" + java.lang.Long.toString(clock(), 36) + "_" + java.util.UUID.randomUUID().toString().substring(0, 8)
 
-    private fun emit(type: String, payload: JsonValue, re: String? = null) {
-        output.envelope(Envelope(PROTOCOL_VERSION, ids.next(), type, clock(), re, payload).encode())
+    /** [to] = one client origin; null = every client (shared state such as `agents.changed`). */
+    private fun emit(type: String, payload: JsonValue, re: String? = null, to: String? = null) {
+        output.envelope(Envelope(PROTOCOL_VERSION, ids.next(), type, clock(), re, payload).encode(), to)
     }
 
-    private fun replyError(re: String, code: ErrorCode, message: String) =
-        emit("error", obj("code" to code.wire, "message" to message), re)
+    private fun replyError(re: String, code: ErrorCode, message: String, to: String) =
+        emit("error", obj("code" to code.wire, "message" to message), re, to)
 
     companion object {
         const val KEY_CONSENT = "autonomy.consent"
@@ -353,6 +402,10 @@ class AgentRuntime(
         const val MAX_TTS_CHARS = 4_000 // TextToSpeech.getMaxSpeechInputLength()
         const val AUDIT_RETENTION_MS = 90L * 24 * 60 * 60 * 1000 // SPEC §16
         const val SNAPSHOT_TTL_MS = 30_000L
+        const val MAX_SCREEN_CHARS = 12_000
+        const val ORIGIN_IME = "ime"
+        const val ORIGIN_COMPANION = "companion"
+        val ORIGINS = setOf(ORIGIN_IME, ORIGIN_COMPANION)
 
         private val INFORMATIONAL = setOf("explain", "define", "summarize", "describe_image")
 
@@ -361,6 +414,16 @@ class AgentRuntime(
             r.skill == "fill_form" -> listOf("apply", "retry")
             r.skill in INFORMATIONAL -> listOf("insert", "copy", "speak")
             else -> listOf("apply", "copy", "speak", "retry")
+        }
+
+        /**
+         * `AgentRunResult.data.confidence` (domain.ts): a decimal string by contract, but a number is
+         * accepted too. Missing, malformed or out-of-range → 0.0, i.e. low confidence → escalate.
+         */
+        fun confidenceOf(data: JsonValue?): Double {
+            val v = data.objOrNull()?.get("confidence")
+            val d = v.num() ?: v.str()?.trim()?.toDoubleOrNull() ?: return 0.0
+            return if (d.isNaN() || d < 0.0 || d > 1.0) 0.0 else d
         }
 
         fun applyModeFor(r: AgentRunRequest): String? = when {

@@ -72,19 +72,40 @@ export interface FormField {
 }
 
 export interface ScreenImage {
+  /** Opaque, in-memory frame handle (SPEC §10.4). Frames never touch disk and expire with the snapshot. */
   handle: string;
   caption?: string;
+  /** Frame size in px after downscaling (rung 3, ADR-0010). */
+  width?: number;
+  height?: number;
+  /** Small `data:image/jpeg;base64,…` thumbnail so the Lens panel can show exactly what the agent sees. */
+  preview?: string;
+}
+
+/** How sure the host is that `chat` is the conversation on screen (rung 1 has no window title). */
+export type ChatMatch = 'exact' | 'likely' | 'uncertain';
+
+/** Result of a scroll-and-read pass (`context.scan`, ADR-0010). */
+export interface ScanInfo {
+  /** Screens read, including the visible one. */
+  pages: number;
+  /** True when the scroll reached the start/end of the content (or nothing scrolls). */
+  complete: boolean;
+  /** The original scroll position was restored afterwards. */
+  restored: boolean;
 }
 
 export interface ScreenContext {
   app: { package: string; label: string; category: AppCategory };
   screenType: ScreenType;
   field: FieldContext;
-  chat?: { title: string; participants: string[]; messages: ChatMessage[] };
+  chat?: { title: string; participants: string[]; messages: ChatMessage[]; match?: ChatMatch };
   form?: { title?: string; fields: FormField[] };
   text?: { title?: string; body: string; selection?: string };
   images?: ScreenImage[];
   sensitivity: { secureWindow: boolean; sensitiveField: boolean; blockedApp: boolean };
+  /** Present when the snapshot came from a scroll-and-read pass. */
+  scan?: ScanInfo;
   /** Which rung of the cost ladder produced this snapshot (SPEC §10.1, ADR-0005). */
   rung: 0 | 1 | 2 | 3 | 4;
   capturedAt: number;
@@ -255,6 +276,8 @@ export interface SystemStatus {
   totalRamMb: number;
   /** A generative model pack is installed (Part 3); AI skills report `unavailable` until then. */
   modelsInstalled: boolean;
+  /** The user has given Autopilot consent (FR-AU-02). The companion offers "Withdraw consent" when true. */
+  autonomyConsent: boolean;
 }
 
 export type SystemSettingsTarget = 'ime_settings' | 'ime_picker' | 'notification_access' | 'accessibility';
@@ -268,6 +291,14 @@ export interface Capabilities {
   voice: boolean;
   tts: boolean;
   screenContext: boolean;
+  /** `context.snapshot {scope:"visual"}` can return screen pixels (rung 3). */
   visualContext: boolean;
   autonomy: boolean;
+  /** Live screen capture (`screen.capture`, MediaProjection with per-session consent, ADR-0010). */
+  screenCapture: boolean;
+  /** Scroll-and-read of the app under the keyboard (`context.scan`, needs screen reading). */
+  screenScan: boolean;
 }
+
+/** Live capture lifecycle (`screen.state`). `paused` carries the reason in `detail`. */
+export type ScreenCaptureStatus = 'off' | 'starting' | 'live' | 'paused';

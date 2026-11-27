@@ -6,6 +6,7 @@ import com.agentkeyboard.app.Ak
 import com.agentkeyboard.app.AkLog
 import com.agentkeyboard.app.agent.AgentClient
 import com.agentkeyboard.app.system.SystemSettings
+import com.agentkeyboard.core.agent.AgentRuntime
 import com.agentkeyboard.core.json.obj
 import com.agentkeyboard.core.protocol.BridgeFailure
 import com.agentkeyboard.core.protocol.Capabilities
@@ -31,17 +32,19 @@ import com.getcapacitor.annotation.CapacitorPlugin
  * - `system.open` / `app.open`: launcher actions that need an Activity context;
  * - editor/UI commands: dropped (there is no text field to edit here).
  *
- * `:agent` broadcasts to every client, so replies are filtered to the requests this plugin sent.
+ * `:agent` addresses replies to this client's origin; they are still matched to the requests this
+ * plugin sent, so a late reply to a request it already failed is dropped.
  */
 @CapacitorPlugin(name = "AgentKit")
 class AgentKitPlugin : Plugin(), AgentClient.Listener {
     private val main = Handler(Looper.getMainLooper())
     private val ids = IdGenerator("c")
-    private val pending = HashSet<String>() // main thread only
+    /** Insertion-ordered so the cap evicts the oldest request, not an arbitrary one. Main thread only. */
+    private val pending = LinkedHashSet<String>()
     private var client: AgentClient? = null
 
     override fun load() {
-        main.post { client = AgentClient(context.applicationContext, this) }
+        main.post { client = AgentClient(context.applicationContext, this, AgentRuntime.ORIGIN_COMPANION) }
     }
 
     /** Called on Capacitor's plugin thread; everything else happens on main. */
@@ -73,6 +76,8 @@ class AgentKitPlugin : Plugin(), AgentClient.Listener {
             } catch (f: BridgeFailure) {
                 fail(env.id, f.code, f.message ?: f.code.wire)
             }
+            // Requests always get an answer, never a silent 5 s timeout.
+            in EDITOR_REQUESTS -> fail(env.id, ErrorCode.UNAVAILABLE, "There is no screen to read in the companion app")
             in EDITOR_ONLY -> Unit
             else -> {
                 pending += env.id
@@ -103,7 +108,7 @@ class AgentKitPlugin : Plugin(), AgentClient.Listener {
 
     private fun capabilities() = Capabilities(
         platform = "android", tier = Ak.tier, nativeSuggestions = false, voice = false, tts = true,
-        screenContext = false, visualContext = false, autonomy = false,
+        screenContext = false, visualContext = false, autonomy = false, screenCapture = false, screenScan = false,
     )
 
     private fun reply(re: String, type: String, payload: com.agentkeyboard.core.json.JsonValue) =
@@ -119,7 +124,8 @@ class AgentKitPlugin : Plugin(), AgentClient.Listener {
         val EDITOR_ONLY = setOf(
             "text.commit", "text.delete", "text.replace", "editor.action", "editor.cursor", "feedback.key",
             "autonomy.set", "autonomy.takeover", "clipboard.paste", "form.fill", "ui.resize",
-            "voice.start", "voice.stop", "voice.cancel", "context.snapshot",
+            "voice.start", "voice.stop", "voice.cancel", "screen.capture",
         )
+        val EDITOR_REQUESTS = setOf("context.snapshot", "context.scan")
     }
 }

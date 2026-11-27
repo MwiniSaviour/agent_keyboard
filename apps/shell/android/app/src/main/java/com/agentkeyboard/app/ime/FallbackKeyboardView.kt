@@ -32,6 +32,8 @@ class FallbackKeyboardView(context: Context, private val listener: Listener) : V
         fun onFallbackSwitchKeyboard()
         /** Haptics/sounds go through the same user settings as the shell's `feedback.key`. */
         fun onFallbackFeedback(kind: String)
+        /** True when the field wants a capital here (`InputConnection.getCursorCapsMode`, F12). */
+        fun fallbackShouldCapitalize(): Boolean
     }
 
     private sealed interface Key {
@@ -64,6 +66,8 @@ class FallbackKeyboardView(context: Context, private val listener: Listener) : V
     private val rects get() = if (rows === letters) letterRects else symbolRects
 
     private var shift = false
+    private var capsLock = false
+    private var lastShiftTapAt = 0L
     private var pressed: Pair<Int, Int>? = null
     private var pointerId = MotionEvent.INVALID_POINTER_ID
 
@@ -84,10 +88,24 @@ class FallbackKeyboardView(context: Context, private val listener: Listener) : V
         }
     }
 
+    private val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0x38000000 } // §7.4 --key-shadow, light theme
+    private val shadowRect = RectF()
+
     init {
         contentDescription = "Keyboard"
         isHapticFeedbackEnabled = false // feedback is routed through the user's settings instead
+        importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
         updateTheme()
+    }
+
+    /**
+     * Auto-capitalisation (F12): shift turns on where the field asks for a capital (sentence start,
+     * word start for names) and off elsewhere. Caps lock is never touched.
+     */
+    fun refreshAutoCaps() {
+        if (capsLock || rows !== letters) return
+        val want = listener.fallbackShouldCapitalize()
+        if (want != shift) { shift = want; invalidate() }
     }
 
     /** `light`, `dark` or `system`: the shell's theme setting (FR-KB-09). */
@@ -117,6 +135,7 @@ class FallbackKeyboardView(context: Context, private val listener: Listener) : V
             resetTouch()
             invalidate()
         }
+        refreshAutoCaps()
     }
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
@@ -162,16 +181,22 @@ class FallbackKeyboardView(context: Context, private val listener: Listener) : V
                 val modifier = key !is Key.Char && key !is Key.Space
                 val p = pressed
                 val isPressed = p != null && p.first == ri && p.second == ki
+                // SPEC §7.4 tokens (apps/shell/src/ui/tokens.css): --mod-bg(-pressed), --key-bg(-pressed).
                 keyPaint.color = when {
-                    modifier && !dark -> if (isPressed) 0xFF333333.toInt() else 0xFF0A0A0A.toInt()
-                    modifier && dark -> if (isPressed) 0xFFDDDDDD.toInt() else 0xFFFFFFFF.toInt()
+                    modifier && !dark -> if (isPressed) 0xFF2B2B2B.toInt() else 0xFF0A0A0A.toInt()
+                    modifier && dark -> if (isPressed) 0xFFD6D6D6.toInt() else 0xFFFFFFFF.toInt()
                     dark -> if (isPressed) 0xFF444444.toInt() else 0xFF2A2A2A.toInt()
-                    else -> if (isPressed) 0xFFE4E4E2.toInt() else 0xFFFFFFFF.toInt()
+                    else -> if (isPressed) 0xFFE4E4E1.toInt() else 0xFFFFFFFF.toInt()
                 }
                 val r = rs[ri][ki]
+                if (!dark && !modifier) { // --key-shadow: 0 1px 0 rgba(0,0,0,.22)
+                    shadowRect.set(r.left, r.top + density, r.right, r.bottom + density)
+                    canvas.drawRoundRect(shadowRect, radius, radius, shadowPaint)
+                }
                 canvas.drawRoundRect(r, radius, radius, keyPaint)
                 val label = when {
                     key is Key.Char && shift -> key.label.uppercase()
+                    key is Key.Shift && capsLock -> "⇪"
                     key is Key.Shift && shift -> "⬆"
                     key is Key.Layer && rows === symbols -> "ABC"
                     else -> key.label
@@ -244,15 +269,147 @@ class FallbackKeyboardView(context: Context, private val listener: Listener) : V
         when (key) {
             is Key.Char -> {
                 listener.onFallbackText(if (shift) key.label.uppercase() else key.label)
-                if (shift) { shift = false; invalidate() }
+                if (shift && !capsLock) { shift = false; invalidate() }
+                post { refreshAutoCaps() } // after the commit lands
             }
-            Key.Shift -> { shift = !shift; invalidate() }
-            Key.Back -> Unit // fired on touch-down (with repeat)
-            Key.Space -> listener.onFallbackText(" ")
-            Key.Enter -> listener.onFallbackEnter()
+            Key.Shift -> {
+                // Double-tap = caps lock (like the shell); a tap while locked unlocks.
+                val now = android.os.SystemClock.uptimeMillis()
+                when {
+                    capsLock -> { capsLock = false; shift = false }
+                    shift && now - lastShiftTapAt < DOUBLE_TAP_MS -> capsLock = true
+                    else -> shift = !shift
+                }
+                lastShiftTapAt = now
+                invalidate()
+            }
+            Key.Back -> post { refreshAutoCaps() } // deleted on touch-down (with repeat)
+            Key.Space -> { listener.onFallbackText(" "); post { refreshAutoCaps() } }
+            Key.Enter -> { listener.onFallbackEnter(); post { refreshAutoCaps() } }
             Key.Switch -> listener.onFallbackSwitchKeyboard()
-            Key.Layer -> { rows = if (rows === letters) symbols else letters; shift = false; invalidate() }
+            Key.Layer -> {
+                rows = if (rows === letters) symbols else letters
+                shift = false; capsLock = false
+                refreshAutoCaps()
+                invalidate()
+            }
         }
+        if (accessibility.isEnabled) sendAccessibilityEvent(android.view.accessibility.AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED)
+    }
+
+    // ───────────── accessibility (finding B): every key is a virtual view for TalkBack ─────────────
+
+    private val accessibility = context.getSystemService(android.view.accessibility.AccessibilityManager::class.java)
+    private var hovered: Pair<Int, Int>? = null
+    private val screenLoc = IntArray(2)
+
+    private fun virtualId(p: Pair<Int, Int>) = p.first * ROW_STRIDE + p.second
+    private fun fromVirtualId(id: Int): Pair<Int, Int>? {
+        val ri = id / ROW_STRIDE
+        val ki = id % ROW_STRIDE
+        return (ri to ki).takeIf { id >= 0 && ri < rows.size && ki < rows[ri].size }
+    }
+
+    /** What TalkBack says for a key. The 🌐 glyph alone would be read as "globe with meridians". */
+    private fun spokenLabel(key: Key): String = when (key) {
+        is Key.Char -> CHAR_NAMES[key.label] ?: if (shift) key.label.uppercase() else key.label
+        Key.Shift -> if (capsLock) "Caps lock on" else if (shift) "Shift on" else "Shift"
+        Key.Back -> "Delete"
+        Key.Space -> "Space"
+        Key.Enter -> "Enter"
+        Key.Switch -> "Next keyboard"
+        Key.Layer -> if (rows === symbols) "Letters" else "Symbols"
+    }
+
+    private val provider = object : android.view.accessibility.AccessibilityNodeProvider() {
+        override fun createAccessibilityNodeInfo(virtualViewId: Int): android.view.accessibility.AccessibilityNodeInfo? {
+            if (virtualViewId == HOST_VIEW_ID) {
+                val info = newNode(HOST_VIEW_ID)
+                onInitializeAccessibilityNodeInfo(info)
+                rows.forEachIndexed { ri, row -> row.indices.forEach { ki -> info.addChild(this@FallbackKeyboardView, virtualId(ri to ki)) } }
+                return info
+            }
+            val p = fromVirtualId(virtualViewId) ?: return null
+            val key = keyAt(p)
+            val r = rects[p.first][p.second]
+            getLocationOnScreen(screenLoc)
+            return newNode(virtualViewId).apply {
+                packageName = context.packageName
+                className = "android.inputmethodservice.Keyboard\$Key"
+                contentDescription = spokenLabel(key)
+                setParent(this@FallbackKeyboardView)
+                setBoundsInScreen(android.graphics.Rect(r.left.toInt() + screenLoc[0], r.top.toInt() + screenLoc[1], r.right.toInt() + screenLoc[0], r.bottom.toInt() + screenLoc[1]))
+                isEnabled = true
+                isVisibleToUser = true
+                isFocusable = true
+                isClickable = true
+                addAction(android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction.ACTION_CLICK)
+                addAction(android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction.ACTION_ACCESSIBILITY_FOCUS)
+            }
+        }
+
+        override fun performAction(virtualViewId: Int, action: Int, arguments: android.os.Bundle?): Boolean {
+            if (virtualViewId == HOST_VIEW_ID) return performAccessibilityAction(action, arguments)
+            val p = fromVirtualId(virtualViewId) ?: return false
+            return when (action) {
+                android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK -> { activate(p); true }
+                android.view.accessibility.AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS -> {
+                    sendVirtualEvent(p, android.view.accessibility.AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUSED); true
+                }
+                else -> false
+            }
+        }
+    }
+
+    /** The public constructors are API 30+; minSdk 29 uses the (later deprecated) pool. */
+    private fun newNode(virtualId: Int): android.view.accessibility.AccessibilityNodeInfo = when {
+        android.os.Build.VERSION.SDK_INT >= 30 && virtualId == HOST_VIEW_ID -> android.view.accessibility.AccessibilityNodeInfo(this)
+        android.os.Build.VERSION.SDK_INT >= 30 -> android.view.accessibility.AccessibilityNodeInfo(this, virtualId)
+        virtualId == HOST_VIEW_ID -> @Suppress("DEPRECATION") android.view.accessibility.AccessibilityNodeInfo.obtain(this)
+        else -> @Suppress("DEPRECATION") android.view.accessibility.AccessibilityNodeInfo.obtain(this, virtualId)
+    }
+
+    override fun getAccessibilityNodeProvider(): android.view.accessibility.AccessibilityNodeProvider = provider
+
+    /** Explore-by-touch: hovering announces keys; lifting the finger on a key types it (TalkBack convention for keyboards). */
+    override fun dispatchHoverEvent(event: MotionEvent): Boolean {
+        if (!accessibility.isTouchExplorationEnabled) return super.dispatchHoverEvent(event)
+        when (event.actionMasked) {
+            MotionEvent.ACTION_HOVER_ENTER, MotionEvent.ACTION_HOVER_MOVE -> {
+                val now = hit(event.x, event.y)
+                if (now != hovered) {
+                    hovered?.let { sendVirtualEvent(it, android.view.accessibility.AccessibilityEvent.TYPE_VIEW_HOVER_EXIT) }
+                    now?.let { sendVirtualEvent(it, android.view.accessibility.AccessibilityEvent.TYPE_VIEW_HOVER_ENTER) }
+                    hovered = now
+                }
+            }
+            MotionEvent.ACTION_HOVER_EXIT -> {
+                val last = hovered
+                hovered = null
+                last?.let { sendVirtualEvent(it, android.view.accessibility.AccessibilityEvent.TYPE_VIEW_HOVER_EXIT) }
+                // Lift-to-type only when the finger left the screen over the key, not when it slid off the keyboard.
+                if (last != null && event.x in 0f..width.toFloat() && event.y in 0f..height.toFloat()) activate(last)
+            }
+        }
+        return true
+    }
+
+    private fun activate(p: Pair<Int, Int>) {
+        val key = keyAt(p)
+        listener.onFallbackFeedback(feedbackKind(key))
+        if (key is Key.Back) listener.onFallbackBackspace()
+        fireOnRelease(key)
+    }
+
+    private fun sendVirtualEvent(p: Pair<Int, Int>, type: Int) {
+        if (!accessibility.isEnabled) return
+        val e = if (android.os.Build.VERSION.SDK_INT >= 30) android.view.accessibility.AccessibilityEvent(type)
+        else @Suppress("DEPRECATION") android.view.accessibility.AccessibilityEvent.obtain(type)
+        e.packageName = context.packageName
+        e.className = "android.inputmethodservice.Keyboard\$Key"
+        e.contentDescription = spokenLabel(keyAt(p))
+        e.setSource(this, virtualId(p))
+        parent?.requestSendAccessibilityEvent(this, e)
     }
 
     private fun keyAt(p: Pair<Int, Int>) = rows[p.first][p.second].first
@@ -277,5 +434,14 @@ class FallbackKeyboardView(context: Context, private val listener: Listener) : V
         const val MAX_KEY_HEIGHT_DP = 58
         const val REPEAT_DELAY_MS = 350L // FR-KB-05, same as the shell
         const val REPEAT_INTERVAL_MS = 60L
+        const val DOUBLE_TAP_MS = 300L
+        const val ROW_STRIDE = 100
+        const val HOST_VIEW_ID = android.view.accessibility.AccessibilityNodeProvider.HOST_VIEW_ID
+        val CHAR_NAMES = mapOf(
+            "," to "Comma", "." to "Period", "@" to "At", "#" to "Hash", "\$" to "Dollar", "_" to "Underscore",
+            "&" to "Ampersand", "-" to "Dash", "+" to "Plus", "(" to "Left parenthesis", ")" to "Right parenthesis",
+            "/" to "Slash", "%" to "Percent", "*" to "Star", "\"" to "Quote", "'" to "Apostrophe", ":" to "Colon",
+            ";" to "Semicolon", "!" to "Exclamation mark", "?" to "Question mark",
+        )
     }
 }
