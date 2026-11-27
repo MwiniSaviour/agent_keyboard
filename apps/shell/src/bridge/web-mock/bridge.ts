@@ -178,7 +178,17 @@ export class WebMockBridge implements NativeBridge {
         if (typeof window !== 'undefined') window.location.href = (p as ShellCommands['app.open']).route;
         return;
       case 'settings.set':
+      case 'ui.resize':
+      case 'system.open':
         return;
+      case 'agents.save': {
+        const { agent } = p as ShellCommands['agents.save'];
+        if (agentRepository.get(agent.id)) agentRepository.update(agent.id, agent);
+        else agentRepository.create(agent);
+        return;
+      }
+      case 'agents.delete':
+        return agentRepository.remove((p as ShellCommands['agents.delete']).id);
     }
   }
 
@@ -199,6 +209,17 @@ export class WebMockBridge implements NativeBridge {
         return [...this.clipboard].sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.at - a.at) as ShellRequests[T]['res'];
       case 'agents.list':
         return agentRepository.list() as ShellRequests[T]['res'];
+      case 'system.status':
+        return {
+          imeEnabled: true,
+          imeSelected: true,
+          notificationAccess: true,
+          screenReading: true,
+          flavor: 'web',
+          tier: 'M',
+          totalRamMb: 0,
+          modelsInstalled: false,
+        } as ShellRequests[T]['res'];
     }
     throw new Error(`unknown request ${String(type)}`);
   }

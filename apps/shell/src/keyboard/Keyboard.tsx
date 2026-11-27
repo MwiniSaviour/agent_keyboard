@@ -3,7 +3,7 @@
  * <Keyboard/> — the IME surface. Owns one controller + store per mount; panels replace the key grid
  * area so the keyboard height never jumps (FR-UI-09).
  */
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { NativeBridge } from '@ak/protocol';
 import { KEY_HEIGHT_PX, useSetting } from '@/lib/settings';
 import { useStore } from '@/lib/store';
@@ -48,6 +48,20 @@ export function Keyboard({ bridge, floating, theme, physicalKeys }: KeyboardProp
 
   useEffect(() => value.controller.init(), [value]);
 
+  // The IME window is sized natively; report the rendered height so it always matches (`ui.resize`).
+  const boardRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = boardRef.current;
+    if (!el || bridge.kind !== 'ime' || typeof ResizeObserver === 'undefined') return;
+    let last = 0;
+    const ro = new ResizeObserver(() => {
+      const height = Math.ceil(el.getBoundingClientRect().height);
+      if (height !== last) bridge.send('ui.resize', { height: (last = height) });
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [bridge]);
+
   useEffect(() => {
     if (!physicalKeys) return;
     const c = value.controller;
@@ -77,6 +91,7 @@ export function Keyboard({ bridge, floating, theme, physicalKeys }: KeyboardProp
   return (
     <ShellContext.Provider value={value}>
       <div
+        ref={boardRef}
         className={`${css.board} ${floating ? css.floating : ''}`}
         data-ak-theme={theme ?? resolved}
         data-strip={stripVisible}

@@ -9,13 +9,13 @@
   ],
   "scripts": {
     "dev": "next dev -H 0.0.0.0 -p 3000",
-    "build": "next build",
+    "build": "next build && node scripts/csp.mjs",
     "preview": "node scripts/serve-static.mjs out 3000",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "cap:sync": "npm run build:native && cap sync",
     "cap:android": "cap add android",
-    "build:native": "NEXT_PUBLIC_AK_MOCK=0 next build",
+    "build:native": "NEXT_PUBLIC_AK_MOCK=0 next build && node scripts/csp.mjs",
     "size": "node scripts/size.mjs"
   },
   "dependencies": {

@@ -307,6 +307,9 @@ export class KeyboardController {
     if (s.field?.sensitive) return this.toast('Autopilot is off in protected fields');
     if (!s.autonomy.enabled && !s.autonomy.consent) return this.store.set({ panel: 'consent' });
     const enabled = !s.autonomy.enabled;
+    // The native host keeps its own consent record and refuses to arm without it (FR-AU-02). Only this
+    // consent flow writes it; re-sending on enable keeps native in sync after its data was cleared.
+    if (enabled) this.bridge.send('settings.set', { key: 'autonomy.consent', value: true });
     this.store.set({ autonomy: { ...s.autonomy, enabled, phase: enabled ? 'arming' : 'off', detail: null } });
     this.bridge.send('autonomy.set', { enabled, level: s.autonomy.level, agentId: s.activeAgentId });
     this.explainCeiling();

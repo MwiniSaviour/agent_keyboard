@@ -15,6 +15,8 @@ import type {
   Insight,
   ScreenContext,
   Suggestion,
+  SystemSettingsTarget,
+  SystemStatus,
   ThemeMode,
 } from './domain';
 
@@ -62,6 +64,17 @@ export interface ShellCommands {
   'settings.set': { key: string; value: unknown };
   'app.open': { route: string };
   'form.fill': { values: Record<string, string> };
+  /** Upsert an agent. The `:agent` service validates and owns persistence (SPEC §16). */
+  'agents.save': { agent: AgentDefinition };
+  /** Delete a custom agent. General can never be deleted (FR-AG-01). */
+  'agents.delete': { id: string };
+  /** Open a system settings screen from the companion's setup checklist. */
+  'system.open': { target: SystemSettingsTarget };
+  /**
+   * The keyboard surface's rendered height in CSS px (= dp in the IME WebView). The IME sizes its
+   * window to it, so height settings and panels never clip or leave a gap (SPEC §9). Integer, 120–600.
+   */
+  'ui.resize': { height: number };
 }
 
 /** Request/response pairs: shell → native → shell. */
@@ -70,6 +83,7 @@ export interface ShellRequests {
   'context.snapshot': { req: { scope: 'field' | 'screen' | 'visual' }; res: ScreenContext };
   'clipboard.list': { req: Empty; res: ClipboardItem[] };
   'agents.list': { req: Empty; res: AgentDefinition[] };
+  'system.status': { req: Empty; res: SystemStatus };
 }
 
 /** Events: native → shell. */
@@ -91,6 +105,12 @@ export interface NativeEvents {
   'agents.changed': Empty;
 }
 
+/** Error payload for `{type: "error", re}` responses. `code` is stable; `message` is user-presentable. */
+export interface ErrorPayload {
+  code: 'unknown_type' | 'bad_payload' | 'secure_field' | 'unavailable' | 'internal' | 'version';
+  message: string;
+}
+
 export type ShellCommandType = keyof ShellCommands;
 export type ShellRequestType = keyof ShellRequests;
 export type NativeEventType = keyof NativeEvents;
@@ -99,7 +119,7 @@ export type Unsubscribe = () => void;
 
 /**
  * The single seam between UI and platform. Implemented by:
- *  - ImeBridge (Android IME WebView, WebMessagePort)       — ADR-0002
+ *  - ImeBridge (Android IME WebView, androidx.webkit WebMessageListener) — ADR-0002
  *  - CapacitorBridge (companion app, Capacitor plugin)
  *  - WebMockBridge (browser playground / tests)
  */

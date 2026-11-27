@@ -6,7 +6,7 @@
  *
  * The mock is only reachable through a dynamic import, so it lives in its own chunk that native
  * hosts never fetch. Production builds additionally set NEXT_PUBLIC_AK_MOCK=0, which removes the
- * import entirely (NFR-P-14: /ime ≤ 180 KB gzip).
+ * import entirely (NFR-P-14: /ime ≤ 210 KB gzip total, ≤ 40 KB app code).
  */
 import type { NativeBridge } from '@ak/protocol';
 import { CapacitorBridge, isCapacitorNative } from './capacitor-bridge';

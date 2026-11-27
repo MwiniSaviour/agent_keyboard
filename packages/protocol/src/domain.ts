@@ -235,6 +235,26 @@ export type ThemeMode = 'light' | 'dark' | 'system';
 
 export type DeviceTier = 'S' | 'M' | 'L';
 
+/** Host integration status, shown in the companion's setup checklist (SPEC §9, §17.2). */
+export interface SystemStatus {
+  /** Our keyboard is enabled in system settings. */
+  imeEnabled: boolean;
+  /** Our keyboard is the current default input method. */
+  imeSelected: boolean;
+  /** Notification access granted (rung 1 context + RemoteInput replies). */
+  notificationAccess: boolean;
+  /** Read-only screen reading (accessibility) enabled (rung 2 context). */
+  screenReading: boolean;
+  /** `play` never performs accessibility actions; `full` may (ADR-0006). */
+  flavor: 'play' | 'full' | 'web';
+  tier: DeviceTier;
+  totalRamMb: number;
+  /** A generative model pack is installed (Part 3); AI skills report `unavailable` until then. */
+  modelsInstalled: boolean;
+}
+
+export type SystemSettingsTarget = 'ime_settings' | 'ime_picker' | 'notification_access' | 'accessibility';
+
 export interface Capabilities {
   protocol: number;
   platform: 'android-ime' | 'android-app' | 'ios-keyboard' | 'web';

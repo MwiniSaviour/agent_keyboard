@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<!-- `full` (sideload) flavor: the accessibility service may tap a chat app's Send button
+     (A11yActions.clickSend), so the disclosure must say so (ADR-0006, Play policy notes in SPEC §11.6.3). -->
+<resources>
+    <string name="a11y_summary">Lets the keyboard read the conversation or form on screen, and tap Send for replies you allowed Autopilot to send. Nothing leaves your phone.</string>
+    <string name="a11y_description">When enabled, Agent Keyboard reads the text of the app you are typing in (for example, the last messages of a chat or the labels of a form) only while the keyboard is open, so replies and form-fill suggestions match the context. If you turn on Autopilot for an agent and a chat app, it may also tap that app\'s Send button after typing a reply you allowed. It never reads password fields, secure screens, or apps on your blocklist, never submits forms, and never acts on payments. Everything stays on your device.</string>
+</resources>

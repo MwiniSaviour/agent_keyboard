@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- IME declaration (SPEC §9). The companion app is the settings activity. -->
+<input-method xmlns:android="http://schemas.android.com/apk/res/android"
+    android:settingsActivity="com.agentkeyboard.app.MainActivity"
+    android:supportsSwitchingToNextInputMethod="true"
+    android:isDefault="false">
+    <subtype
+        android:label="@string/ime_subtype_en"
+        android:imeSubtypeLocale="en_US"
+        android:imeSubtypeMode="keyboard"
+        android:languageTag="en-US" />
+</input-method>

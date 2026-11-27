@@ -1,0 +1,28 @@
+// Pure Kotlin/JVM: protocol codec, field classification, edit batching, privacy filters, autonomy
+// policy + state machine, schema migrations. No Android dependency, so it is unit-tested on the JVM
+// (here with JUnit 4; in the sandbox with tools/verify-core.sh) and shared by the IME, the :agent
+// service and the Capacitor plugin.
+apply plugin: 'java-library'
+apply plugin: 'org.jetbrains.kotlin.jvm'
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
+}
+
+kotlin {
+    jvmToolchain(21)
+    compilerOptions {
+        allWarningsAsErrors = true
+    }
+}
+
+dependencies {
+    testImplementation "junit:junit:$junitVersion"
+    testImplementation "org.jetbrains.kotlin:kotlin-test-junit:$kotlinVersion"
+}
+
+tasks.withType(Test).configureEach {
+    // Shared contract fixtures live in packages/protocol/fixtures (SPEC §19.1).
+    systemProperty 'ak.fixtures', rootProject.file('../../../packages/protocol/fixtures').absolutePath
+}

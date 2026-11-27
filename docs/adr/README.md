@@ -13,3 +13,4 @@ supersede with a new ADR instead of editing. Reference the ADR in PRs that imple
 | [0006](0006-policy-compliant-autonomy.md) | Autonomy via IME + RemoteInput; `play` / `full` flavors | Accepted (pending legal Q2) |
 | [0007](0007-sqlite-fts5-sqlite-vec.md) | SQLite + FTS5 + sqlite-vec (SQLCipher) as the single store | Accepted |
 | [0008](0008-zero-dependency-hot-path.md) | Zero-dependency, pure-reducer hot path in the shell | Accepted |
+| [0009](0009-native-host-implementation.md) | Native host implementation: pure-Kotlin core, fail-closed gates, single-flight `:agent`, no-SDK verification | Accepted |
