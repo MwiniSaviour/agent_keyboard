@@ -96,6 +96,18 @@ export interface ShellCommands {
   'models.delete': { id: string };
   /** Companion only: open the system file picker to install packs or a signed catalog from files. */
   'models.import': Empty;
+  /** Use this installed model for its job (text or voice) instead of the recommended one. */
+  'models.use': { id: string };
+  /**
+   * Look for model files already on the phone; results arrive in `models.changed` (`found`).
+   * `pick: 'folder'` (companion only) first lets the user grant a folder to search.
+   */
+  'models.scan': { pick?: 'folder' };
+  /**
+   * Install a model from `found` by copying it into app storage. Unverified models need
+   * `trust: true`, sent only after the user confirmed they trust the file.
+   */
+  'models.adopt': { id: string; trust?: boolean };
 }
 
 /** Request/response pairs: shell → native → shell. */

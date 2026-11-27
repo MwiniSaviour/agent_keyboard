@@ -39,6 +39,9 @@ object CommandEncoder {
         is Command.ModelsCancel -> "models.cancel"
         is Command.ModelsDelete -> "models.delete"
         Command.ModelsImport -> "models.import"
+        is Command.ModelsUse -> "models.use"
+        is Command.ModelsScan -> "models.scan"
+        is Command.ModelsAdopt -> "models.adopt"
     }
 
     fun encode(c: Command): JsonValue = when (c) {
@@ -69,5 +72,8 @@ object CommandEncoder {
         is Command.ModelsCancel -> obj("id" to c.id)
         is Command.ModelsDelete -> obj("id" to c.id)
         Command.ModelsImport -> obj()
+        is Command.ModelsUse -> obj("id" to c.id)
+        is Command.ModelsScan -> obj("pick" to if (c.pickFolder) "folder" else null)
+        is Command.ModelsAdopt -> obj("id" to c.id, "trust" to if (c.trust) true else null)
     }
 }

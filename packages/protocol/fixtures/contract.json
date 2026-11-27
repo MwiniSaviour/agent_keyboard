@@ -32,7 +32,10 @@
       "models.download",
       "models.cancel",
       "models.delete",
-      "models.import"
+      "models.import",
+      "models.use",
+      "models.scan",
+      "models.adopt"
     ],
     "requests": [
       "hello",
@@ -206,7 +209,17 @@
     "models.delete": {
       "id": "gemma-3-1b-it-int4"
     },
-    "models.import": {}
+    "models.import": {},
+    "models.use": {
+      "id": "gemma-3-1b-it-int4"
+    },
+    "models.scan": {
+      "pick": "folder"
+    },
+    "models.adopt": {
+      "id": "custom-2b-other",
+      "trust": true
+    }
   },
   "requests": {
     "hello": {
@@ -430,7 +443,23 @@
             "licenseUrl": "https://ai.google.dev/gemma/terms",
             "core": true,
             "state": "downloading",
-            "receivedBytes": 125829120
+            "receivedBytes": 125829120,
+            "fit": "recommended",
+            "fitDetail": "Best for this phone"
+          },
+          {
+            "id": "custom-1a2b-my-model",
+            "name": "My model",
+            "kind": "llm",
+            "role": "Your model, found on this phone (unverified)",
+            "sizeBytes": 104857600,
+            "license": "Unknown: check where it came from",
+            "core": false,
+            "state": "installed",
+            "receivedBytes": 104857600,
+            "fit": "good",
+            "active": true,
+            "custom": true
           },
           {
             "id": "embeddinggemma-300m",
@@ -450,7 +479,39 @@
         "resident": {
           "id": "gemma-3-1b-it-int4",
           "backend": "cpu"
-        }
+        },
+        "device": {
+          "ramMb": 5600,
+          "ramLabel": "6 GB",
+          "gpu": true,
+          "soc": "SM7435"
+        },
+        "found": [
+          {
+            "id": "found-gemma-4-e2b-it",
+            "name": "Gemma 4 E2B",
+            "kind": "llm",
+            "sizeBytes": 2588147712,
+            "where": "Download",
+            "verified": true,
+            "entryId": "gemma-4-e2b-it"
+          },
+          {
+            "id": "custom-2b-other",
+            "name": "other",
+            "kind": "llm",
+            "sizeBytes": 60000000,
+            "where": "Documents",
+            "verified": false
+          }
+        ],
+        "scan": {
+          "state": "idle",
+          "access": "folders",
+          "folders": 1,
+          "allFilesOption": false
+        },
+        "micGranted": false
       }
     }
   },
@@ -562,7 +623,23 @@
           "licenseUrl": "https://ai.google.dev/gemma/terms",
           "core": true,
           "state": "downloading",
-          "receivedBytes": 125829120
+          "receivedBytes": 125829120,
+          "fit": "recommended",
+          "fitDetail": "Best for this phone"
+        },
+        {
+          "id": "custom-1a2b-my-model",
+          "name": "My model",
+          "kind": "llm",
+          "role": "Your model, found on this phone (unverified)",
+          "sizeBytes": 104857600,
+          "license": "Unknown: check where it came from",
+          "core": false,
+          "state": "installed",
+          "receivedBytes": 104857600,
+          "fit": "good",
+          "active": true,
+          "custom": true
         },
         {
           "id": "embeddinggemma-300m",
@@ -582,7 +659,39 @@
       "resident": {
         "id": "gemma-3-1b-it-int4",
         "backend": "cpu"
-      }
+      },
+      "device": {
+        "ramMb": 5600,
+        "ramLabel": "6 GB",
+        "gpu": true,
+        "soc": "SM7435"
+      },
+      "found": [
+        {
+          "id": "found-gemma-4-e2b-it",
+          "name": "Gemma 4 E2B",
+          "kind": "llm",
+          "sizeBytes": 2588147712,
+          "where": "Download",
+          "verified": true,
+          "entryId": "gemma-4-e2b-it"
+        },
+        {
+          "id": "custom-2b-other",
+          "name": "other",
+          "kind": "llm",
+          "sizeBytes": 60000000,
+          "where": "Documents",
+          "verified": false
+        }
+      ],
+      "scan": {
+        "state": "idle",
+        "access": "folders",
+        "folders": 1,
+        "allFilesOption": false
+      },
+      "micGranted": false
     }
   },
   "rejected": [
@@ -669,6 +778,16 @@
     {
       "name": "bad model id",
       "raw": "{\"v\":1,\"id\":\"s:17\",\"type\":\"models.delete\",\"ts\":1,\"payload\":{\"id\":\"../../databases/ak.db\"}}",
+      "code": "dropped"
+    },
+    {
+      "name": "path as model to use",
+      "raw": "{\"v\":1,\"id\":\"s:19\",\"type\":\"models.use\",\"ts\":1,\"payload\":{\"id\":\"/sdcard/x.litertlm\"}}",
+      "code": "dropped"
+    },
+    {
+      "name": "trust that is not a boolean",
+      "raw": "{\"v\":1,\"id\":\"s:20\",\"type\":\"models.adopt\",\"ts\":1,\"payload\":{\"id\":\"custom-2b-other\",\"trust\":\"yes\"}}",
       "code": "dropped"
     },
     {

@@ -19,6 +19,12 @@ import com.agentkeyboard.core.skills.Skills
 class LocalInferenceEngine(
     private val models: InstalledModels,
     private val manager: ModelManager,
+    /**
+     * Decode speed observed on this phone (tokens/s, from first streamed chunk to the end). Feeds the
+     * recommender, which trusts a measurement over its estimate (ADR-0012).
+     */
+    private val onSpeed: (modelId: String, tokensPerSec: Double) -> Unit = { _, _ -> },
+    private val nanos: () -> Long = System::nanoTime,
 ) : InferenceEngine {
 
     @Volatile private var lastModel: String? = null
@@ -39,9 +45,17 @@ class LocalInferenceEngine(
         return manager.use(installed, spec.capability) { model ->
             lastModel = installed.entry.id
             val filter = if (spec.stream) ThinkFilter(onToken) else null
-            val result = model.generate(PromptBuilder.request(prompt, spec), { delta -> filter?.push(delta) }, isCancelled)
+            var first = 0L
+            var chunks = 0
+            val result = model.generate(PromptBuilder.request(prompt, spec), { delta ->
+                if (chunks++ == 0) first = nanos()
+                filter?.push(delta)
+            }, isCancelled)
             filter?.flush()
             if (result.cancelled || isCancelled()) throw EngineFailure("cancelled", "Cancelled")
+            // LiteRT-LM streams one token per callback; short replies are too noisy to learn from.
+            val secs = (nanos() - first) / 1e9
+            if (chunks >= MIN_SPEED_SAMPLE && secs > 0) onSpeed(installed.entry.id, (chunks - 1) / secs)
             OutputValidators.validate(
                 spec, result.text,
                 OutputValidators.Context(material = prompt.user, source = prompt.source, agentName = job.agent.name, truncated = result.truncated),
@@ -50,6 +64,7 @@ class LocalInferenceEngine(
     }
 
     companion object {
+        const val MIN_SPEED_SAMPLE = 24
         const val NO_MODEL = "The on-device AI model isn’t installed yet. Open Agent Keyboard → Models to add it."
     }
 }

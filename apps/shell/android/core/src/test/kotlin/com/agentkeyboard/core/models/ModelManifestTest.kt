@@ -14,14 +14,42 @@ class ModelManifestTest {
     /** Cross-language vector: signed by Node (`scripts/models/manifest.mjs fixture`), verified by java.security. */
     @Test fun nodeSignedFixtureVerifiesOnTheJvm() {
         val m = ManifestFixture.manifest
-        assertEquals(1, m.schema)
-        assertEquals(listOf("gemma-3-1b-it-int4", "gemma-4-e2b-it"), m.entries.map { it.id })
+        assertEquals(2, m.schema)
+        assertEquals(listOf("gemma-3-1b-it-int4", "gemma-4-e2b-it", "zipformer-en-20m"), m.entries.map { it.id })
         val g = m.entry("gemma-3-1b-it-int4")!!
         assertEquals(setOf(DeviceTier.S), g.coreFor)
         assertEquals(listOf(Backend.GPU, Backend.CPU).toSet(), g.backends.toSet())
         assertEquals(16L, g.sizeBytes)
         assertEquals(1024, g.contextTokens)
         assertTrue(Capability.VISION in m.entry("gemma-4-e2b-it")!!.capabilities)
+        assertEquals(40, g.quality)
+        val stt = m.entry("zipformer-en-20m")!!
+        assertEquals(ModelKind.STT, stt.kind)
+        assertEquals("sherpa-onnx", stt.runtime)
+        assertEquals(4, stt.files.size)
+        assertEquals(stt.files.sumOf { it.sizeBytes }, stt.sizeBytes)
+        assertEquals("tokens.txt", stt.config["tokens"])
+        assertEquals("zipformer", stt.config["modelType"])
+        assertEquals(setOf(Capability.TRANSCRIBE), stt.capabilities)
+        assertEquals(stt, m.bySha(stt.sha256))
+    }
+
+    @Test fun schemaTwoFilesAreValidated() {
+        fun bad(entry: String) = assertFailsWith<ManifestException>(entry) { ManifestParser.parse(manifest(entry, schema = 2)) }
+        val ok = ManifestParser.parse(manifest(sttJson(), schema = 2)).entries.single()
+        assertEquals(listOf("e.onnx", "d.onnx", "j.onnx", "t.txt"), ok.files.map { it.name })
+        assertFailsWith<ManifestException> { ManifestParser.parse(manifest(sttJson(), schema = 1)) } // files[] needs schema 2
+        bad(sttJson(files = "[]"))
+        bad(sttJson(names = listOf("e.onnx", "e.onnx", "j.onnx", "t.txt"))) // duplicate names
+        bad(sttJson(names = listOf("e.onnx", "d.onnx", "../j.onnx", "t.txt")))
+        bad(sttJson(config = """{"encoder":"e.onnx","decoder":"d.onnx","joiner":"/etc/j.onnx","tokens":"t.txt"}""")) // must name its own files
+        bad(sttJson(config = """{"encoder":"e.onnx","decoder":"d.onnx","tokens":"t.txt"}"""))
+        bad(sttJson(kind = "llm")) // sherpa-onnx runs speech only
+        bad(sttJson(url = "https://huggingface.co/a/b/resolve/main/x")) // HF must be pinned to a commit
+        bad(sttJson(quality = "101"))
+        val pinned = ManifestParser.parse(manifest(sttJson(url = "https://huggingface.co/a/b/resolve/${"0123456789".repeat(4)}/x"), schema = 2))
+        assertEquals(4, pinned.entries.single().files.size)
+        assertEquals(50, ManifestParser.parse(manifest(entryJson())).entries.single().quality) // default
     }
 
     @Test fun tamperedPayloadOrSignatureIsRejected() {
@@ -74,7 +102,16 @@ class ModelManifestTest {
     }
 
     private fun b64(b: ByteArray) = Base64.getEncoder().encodeToString(b)
-    private fun manifest(entries: String) = """{"schema":1,"issuedAt":1764201600000,"models":[$entries]}"""
+    private fun manifest(entries: String, schema: Int = 1) = """{"schema":$schema,"issuedAt":1764201600000,"models":[$entries]}"""
+    private fun sttJson(
+        names: List<String> = listOf("e.onnx", "d.onnx", "j.onnx", "t.txt"), url: String = "https://cdn.example/stt",
+        files: String? = null, kind: String = "stt", quality: String = "55",
+        config: String = """{"encoder":"e.onnx","decoder":"d.onnx","joiner":"j.onnx","tokens":"t.txt","modelType":"zipformer"}""",
+    ): String {
+        val list = files ?: names.joinToString(",", "[", "]") { """{"name":"$it","url":"$url/$it","sha256":"${"b".repeat(64)}","sizeBytes":10}""" }
+        return """{"id":"stt1","kind":"$kind","name":"S","role":"r","files":$list,"license":"Apache-2.0","tiers":["S"],
+            "capabilities":["transcribe"],"runtime":"sherpa-onnx","ramMb":120,"quality":$quality,"config":$config}"""
+    }
     private fun entryJson(
         id: String = "m1", file: String = "m1.litertlm", url: String = "https://cdn.example/m1.litertlm",
         sha: String = "a".repeat(64), size: String = "1024", coreFor: String = "[\"S\"]", runtime: String = "litertlm",

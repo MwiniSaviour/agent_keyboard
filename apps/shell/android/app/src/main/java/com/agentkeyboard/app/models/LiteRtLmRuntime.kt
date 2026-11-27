@@ -40,7 +40,7 @@ class LiteRtLmRuntime(private val cacheDir: File, private val nativeLibraryDir: 
         cacheDir.mkdirs()
         val engine = Engine(
             EngineConfig(
-                modelPath = model.path,
+                modelPath = model.primary,
                 backend = backend,
                 // Vision encoder on the same accelerator (CPU when the text model is on CPU).
                 visionBackend = if (options.vision) backendOf(options.backend, options.threads) else null,

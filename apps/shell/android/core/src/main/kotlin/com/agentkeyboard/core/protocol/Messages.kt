@@ -43,6 +43,10 @@ sealed interface Command {
     data class ModelsCancel(val id: String) : Command
     data class ModelsDelete(val id: String) : Command
     data object ModelsImport : Command
+    data class ModelsUse(val id: String) : Command
+    /** [pickFolder]: the companion first lets the user grant a folder (SAF), then :agent scans. */
+    data class ModelsScan(val pickFolder: Boolean) : Command
+    data class ModelsAdopt(val id: String, val trust: Boolean) : Command
 
     /** Traffic the native side must refuse while a sensitive field is focused (FR-KB-14, SPEC §9). */
     val forbiddenInSecureField: Boolean
@@ -158,6 +162,17 @@ object MessageDecoder {
             "models.cancel" -> Command.ModelsCancel(p.reqStr("id", 64).takeIf { MODEL_ID.matches(it) } ?: bad("id"))
             "models.delete" -> Command.ModelsDelete(p.reqStr("id", 64).takeIf { MODEL_ID.matches(it) } ?: bad("id"))
             "models.import" -> Command.ModelsImport
+            "models.use" -> Command.ModelsUse(p.reqStr("id", 64).takeIf { MODEL_ID.matches(it) } ?: bad("id"))
+            "models.scan" -> Command.ModelsScan(
+                when (val pick = p["pick"]) {
+                    null -> false
+                    else -> pick.str()?.takeIf { it == "folder" }?.let { true } ?: bad("pick")
+                },
+            )
+            "models.adopt" -> Command.ModelsAdopt(
+                p.reqStr("id", 64).takeIf { MODEL_ID.matches(it) } ?: bad("id"),
+                p["trust"]?.let { it.bool() ?: bad("trust") } ?: false,
+            )
             else -> throw BridgeFailure(ErrorCode.UNKNOWN_TYPE, "unknown command '$type'")
         }
     }

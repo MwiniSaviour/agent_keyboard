@@ -74,6 +74,22 @@ const modelsStatus: ModelsStatus = {
       core: true,
       state: 'downloading',
       receivedBytes: 125829120,
+      fit: 'recommended',
+      fitDetail: 'Best for this phone',
+    },
+    {
+      id: 'custom-1a2b-my-model',
+      name: 'My model',
+      kind: 'llm',
+      role: 'Your model, found on this phone (unverified)',
+      sizeBytes: 104857600,
+      license: 'Unknown: check where it came from',
+      core: false,
+      state: 'installed',
+      receivedBytes: 104857600,
+      fit: 'good',
+      active: true,
+      custom: true,
     },
     {
       id: 'embeddinggemma-300m',
@@ -91,6 +107,13 @@ const modelsStatus: ModelsStatus = {
   freeBytes: 21474836480,
   wifiOnly: true,
   resident: { id: 'gemma-3-1b-it-int4', backend: 'cpu' },
+  device: { ramMb: 5600, ramLabel: '6 GB', gpu: true, soc: 'SM7435' },
+  found: [
+    { id: 'found-gemma-4-e2b-it', name: 'Gemma 4 E2B', kind: 'llm', sizeBytes: 2588147712, where: 'Download', verified: true, entryId: 'gemma-4-e2b-it' },
+    { id: 'custom-2b-other', name: 'other', kind: 'llm', sizeBytes: 60000000, where: 'Documents', verified: false },
+  ],
+  scan: { state: 'idle', access: 'folders', folders: 1, allFilesOption: false },
+  micGranted: false,
 };
 
 /** One valid payload per shell → native command. */
@@ -131,6 +154,9 @@ export const commands: { [K in ShellCommandType]: ShellCommands[K] } = {
   'models.cancel': { id: 'gemma-3-1b-it-int4' },
   'models.delete': { id: 'gemma-3-1b-it-int4' },
   'models.import': {},
+  'models.use': { id: 'gemma-3-1b-it-int4' },
+  'models.scan': { pick: 'folder' },
+  'models.adopt': { id: 'custom-2b-other', trust: true },
 };
 
 /** One valid request and a representative native response per request type. */
@@ -284,6 +310,8 @@ export const rejected: Array<{ name: string; raw: string; code: ErrorPayload['co
   { name: 'bad scan direction', raw: '{"v":1,"id":"s:14","type":"context.scan","ts":1,"payload":{"direction":"left","pages":2}}', code: 'bad_payload' },
   { name: 'too many downloads', raw: `{"v":1,"id":"s:16","type":"models.download","ts":1,"payload":{"ids":[${Array.from({ length: 17 }, (_, i) => `"m${i}"`).join(',')}]}}`, code: 'dropped' },
   { name: 'bad model id', raw: '{"v":1,"id":"s:17","type":"models.delete","ts":1,"payload":{"id":"../../databases/ak.db"}}', code: 'dropped' },
+  { name: 'path as model to use', raw: '{"v":1,"id":"s:19","type":"models.use","ts":1,"payload":{"id":"/sdcard/x.litertlm"}}', code: 'dropped' },
+  { name: 'trust that is not a boolean', raw: '{"v":1,"id":"s:20","type":"models.adopt","ts":1,"payload":{"id":"custom-2b-other","trust":"yes"}}', code: 'dropped' },
   { name: 'unknown models request', raw: '{"v":1,"id":"s:18","type":"models.explode","ts":1,"payload":{}}', code: 'unknown_type' },
   { name: 'capture without flag', raw: '{"v":1,"id":"s:15","type":"screen.capture","ts":1,"payload":{}}', code: 'dropped' },
   { name: 'agent with bad ceiling', raw: '{"v":1,"id":"s:11","type":"agents.save","ts":1,"payload":{"agent":{"id":"x","kind":"custom","name":"X","role":"r","tone":"neutral","autonomyCeiling":"yolo","appScope":"all"}}}', code: 'bad_payload' },

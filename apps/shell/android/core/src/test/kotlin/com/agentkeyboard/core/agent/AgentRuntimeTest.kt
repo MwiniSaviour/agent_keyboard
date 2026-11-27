@@ -473,7 +473,21 @@ class AgentRuntimeTest {
         runtime(models = modelService()).post(env("models.status"), AgentRuntime.ORIGIN_COMPANION)
         val st = out.ofType("models.status.result").single().p()
         assertEquals("ready", st["catalog"].str())
-        assertEquals(listOf("gemma-3-1b-it-int4"), st["packs"].arrOrNull()!!.items.map { it.objOrNull()!!["id"].str() })
+        val packs = st["packs"].arrOrNull()!!.items.map { it.objOrNull()!! }
+        assertEquals(setOf("gemma-3-1b-it-int4", "gemma-4-e2b-it", "zipformer-en-20m"), packs.map { it["id"].str() }.toSet())
+        assertTrue(packs.all { it["fit"].str() in setOf("recommended", "good", "slow", "too_big") })
+        assertNotNull(st["device"].objOrNull())
+    }
+
+    @Test fun modelChoiceAndDiscoveryCommandsReachTheService() {
+        val ms = modelService()
+        val rt = runtime(models = ms)
+        rt.post(env("models.scan", "{}"), AgentRuntime.ORIGIN_COMPANION)
+        rt.post(env("models.use", """{"id":"gemma-3-1b-it-int4"}"""), AgentRuntime.ORIGIN_COMPANION) // not installed: ignored
+        rt.post(env("models.adopt", """{"id":"found-x","trust":true}"""), AgentRuntime.ORIGIN_COMPANION) // nothing found: ignored
+        assertTrue(out.ofType("error").isEmpty())
+        rt.post(env("models.use", """{"id":"../x"}"""), AgentRuntime.ORIGIN_COMPANION)
+        assertEquals("bad_payload", out.ofType("error").single().p()["code"].str())
     }
 
     @Test fun theShellCanOnlyToggleWifiOnlyAmongModelSettings() {

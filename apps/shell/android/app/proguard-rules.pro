@@ -28,3 +28,5 @@
 -keep class com.agentkeyboard.app.agent.IAgentCallback** { *; }
 # Capacitor discovers plugins by annotation.
 -keep @com.getcapacitor.annotation.CapacitorPlugin class * { *; }
+# sherpa-onnx's JNI reads its config classes' fields by name (GetFieldID): they must keep their names.
+-keep class com.k2fsa.sherpa.onnx.** { *; }

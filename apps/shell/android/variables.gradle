@@ -18,4 +18,9 @@ ext {
     androidxSqliteVersion = '2.7.0'
     // Part 3: the only generative runtime (ADR-0004/0011). Bump with tools/app-stubs/com/google/ai/edge/litertlm.
     litertlmVersion = '0.20.0'
+    // Part 4: streaming speech-to-text (SPEC §13, ADR-0012). The official release AAR with ONNX Runtime
+    // linked statically (one .so per ABI), fetched from GitHub and checked against GitHub's published
+    // digest. Bump with tools/app-stubs/com/k2fsa/sherpa/onnx.
+    sherpaOnnxVersion = '2.0.3'
+    sherpaOnnxSha256 = '7744a3a8f08f017d59c2d8ed8d9b700345561f5abe9f4e06dc6eaef3a0b977b4'
 }

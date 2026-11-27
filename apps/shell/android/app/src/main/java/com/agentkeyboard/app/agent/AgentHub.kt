@@ -1,5 +1,6 @@
 package com.agentkeyboard.app.agent
 
+import android.content.pm.PackageManager
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.Looper
@@ -13,6 +14,9 @@ import com.agentkeyboard.app.BuildConfig
 import com.agentkeyboard.app.models.AndroidDevice
 import com.agentkeyboard.app.models.AndroidHttp
 import com.agentkeyboard.app.models.AndroidModelFiles
+import com.agentkeyboard.app.models.AndroidModelScanner
+import com.agentkeyboard.app.models.AndroidSpecs
+import com.agentkeyboard.app.models.SttPointer
 import com.agentkeyboard.app.models.AndroidNetwork
 import com.agentkeyboard.app.models.LiteRtLmRuntime
 import com.agentkeyboard.app.models.PrefsProbeStore
@@ -29,6 +33,7 @@ import com.agentkeyboard.core.inference.LocalInferenceEngine
 import com.agentkeyboard.core.inference.ModelManager
 import com.agentkeyboard.core.models.ManifestException
 import com.agentkeyboard.core.models.ManifestVerifier
+import com.agentkeyboard.core.models.Capability
 import com.agentkeyboard.core.models.ModelService
 import java.io.File
 import java.util.concurrent.Executor
@@ -150,14 +155,21 @@ object AgentHub {
             network = AndroidNetwork(ctx) { handler.post { service.networkChanged() } },
             io = ioThread,
             serial = serial,
-            onChanged = { status -> rt?.modelsChanged(status) },
+            onChanged = { status ->
+                rt?.modelsChanged(status)
+                publishVoiceModel(service)
+            },
             onTransfer = { on -> setWork(WORK_TRANSFER, on) },
             onRemoved = { id -> modelManager.evict(id) },
             residency = { modelManager.resident },
+            specs = AndroidSpecs.read(ctx).also { AkLog.i("device: ${it.totalRamMb} MB, ${it.cpuCores} cores, gpu=${it.gpu}, lowRam=${it.lowRam}") },
+            scanner = AndroidModelScanner(ctx, allFilesOption = BuildConfig.ALL_FILES),
+            micGranted = { ctx.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED },
             log = AkLog::d,
         ).also {
             it.start()
             models = it
+            publishVoiceModel(it)
         }
         val output = object : AgentOutput {
             override fun envelope(raw: String, to: String?) = broadcast(to) { it.onEnvelope(raw) }
@@ -172,7 +184,8 @@ object AgentHub {
             audit = SqlAuditStore(db),
             settings = settings,
             speech = sp,
-            engine = LocalInferenceEngine(service, modelManager),
+            // Measured decode speed refines the per-phone advice (ADR-0012); recorded on the serial thread.
+            engine = LocalInferenceEngine(service, modelManager, onSpeed = { id, tps -> serial.execute { service.recordSpeed(id, tps) } }),
             output = output,
             status = { SystemSettings.status(ctx, modelsInstalled = service.hasTextModel()) },
             engineExecutor = engineThread,
@@ -191,6 +204,23 @@ object AgentHub {
             rt = it
             it.start()
             AkLog.i("agent runtime ready in ${(System.nanoTime() - t0) / 1_000_000} ms")
+        }
+    }
+
+    /** Last voice model published for the keyboard process (serial thread). */
+    private var voicePointer: String? = "?"
+
+    /** Keeps [SttPointer] in step with the active speech model; rewrites only on change. */
+    private fun publishVoiceModel(service: ModelService) {
+        val m = service.pick(Capability.TRANSCRIBE)
+        val key = m?.let { "${it.entry.id}:${it.entry.sha256}" }
+        if (key == voicePointer) return
+        voicePointer = key
+        try {
+            SttPointer.publish(Ak.app, m)
+        } catch (e: java.io.IOException) {
+            AkLog.w("couldn't publish the voice model")
+            voicePointer = "?"
         }
     }
 

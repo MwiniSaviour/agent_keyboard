@@ -12,6 +12,7 @@ import com.agentkeyboard.core.inference.ProbeStore
 import com.agentkeyboard.core.models.HttpBody
 import com.agentkeyboard.core.models.HttpSource
 import com.agentkeyboard.core.models.ModelEntry
+import com.agentkeyboard.core.models.ModelFile
 import com.agentkeyboard.core.models.ModelFiles
 import com.agentkeyboard.core.models.NetworkState
 import java.io.ByteArrayInputStream
@@ -30,22 +31,26 @@ import java.net.URL
  */
 
 /**
- * Model files live in `noBackupFilesDir/models`: app-private, never in backups or the APK
- * (SPEC §12.6), and memory-mapped by LiteRT-LM from there. A download is written to `<file>.part`,
- * fsynced, then renamed over the final name, which is atomic within one directory: a crash leaves
- * either the old state or the new one, never a half-written model under the real name.
+ * Model files live in `noBackupFilesDir/models/<id>/`: app-private, never in backups or the APK
+ * (SPEC §12.6), memory-mapped by LiteRT-LM and opened by sherpa-onnx from there. A download is written
+ * to `<file>.part`, fsynced, then renamed over the final name, which is atomic within one directory: a
+ * crash leaves either the old state or the new one, never a half-written file under the real name.
+ * Every file of a multi-file model shares the model's directory, so the runtime gets one path.
  */
 class AndroidModelFiles(context: Context) : ModelFiles {
-    private val dir = File(context.noBackupFilesDir, "models").apply { mkdirs() }
+    private val root = File(context.noBackupFilesDir, "models").apply { mkdirs() }
     private val storage = context.getSystemService(StorageManager::class.java)
 
-    private fun part(e: ModelEntry) = File(dir, e.file + ".part")
-    private fun final(e: ModelEntry) = File(dir, e.file)
+    // Ids and file names are validated by ManifestParser (no separators, no "..").
+    private fun dirOf(e: ModelEntry) = File(root, e.id)
+    private fun part(e: ModelEntry, f: ModelFile) = File(dirOf(e), f.name + ".part")
+    private fun final(e: ModelEntry, f: ModelFile) = File(dirOf(e), f.name)
 
-    override fun partialLength(entry: ModelEntry): Long = part(entry).length()
+    override fun partialLength(entry: ModelEntry, file: ModelFile): Long = part(entry, file).length()
 
-    override fun openPartial(entry: ModelEntry, append: Boolean): OutputStream {
-        val out = FileOutputStream(part(entry), append)
+    override fun openPartial(entry: ModelEntry, file: ModelFile, append: Boolean): OutputStream {
+        dirOf(entry).mkdirs()
+        val out = FileOutputStream(part(entry, file), append)
         // fsync on close so a committed file's bytes are on disk before the rename that publishes it.
         return object : FilterOutputStream(out) {
             override fun write(b: ByteArray, off: Int, len: Int) = out.write(b, off, len)
@@ -60,44 +65,61 @@ class AndroidModelFiles(context: Context) : ModelFiles {
         }
     }
 
-    override fun readPartial(entry: ModelEntry): InputStream = FileInputStream(part(entry))
+    override fun readPartial(entry: ModelEntry, file: ModelFile): InputStream = FileInputStream(part(entry, file))
 
-    override fun deletePartial(entry: ModelEntry) {
-        part(entry).delete()
+    override fun deletePartial(entry: ModelEntry, file: ModelFile) {
+        part(entry, file).delete()
     }
 
-    override fun commit(entry: ModelEntry): String {
-        val target = final(entry)
-        if (!part(entry).renameTo(target)) throw IOException("rename failed")
-        return target.absolutePath
+    override fun commit(entry: ModelEntry, file: ModelFile) {
+        if (!part(entry, file).renameTo(final(entry, file))) throw IOException("rename failed")
     }
 
-    override fun finalPath(entry: ModelEntry): String? = final(entry).takeIf { it.isFile && it.length() == entry.sizeBytes }?.absolutePath
+    override fun hasFinal(entry: ModelEntry, file: ModelFile): Boolean {
+        val f = final(entry, file)
+        if (f.isFile) return f.length() == file.sizeBytes
+        // Part 3 kept single-file models flat in models/; move one into its directory once.
+        val legacy = File(root, file.name)
+        if (entry.files.size == 1 && legacy.isFile && legacy.length() == file.sizeBytes) {
+            dirOf(entry).mkdirs()
+            return legacy.renameTo(f)
+        }
+        return false
+    }
 
-    override fun deleteFinal(entry: ModelEntry) {
-        final(entry).delete()
+    override fun location(entry: ModelEntry): String = dirOf(entry).absolutePath
+
+    override fun deleteAll(entry: ModelEntry) {
+        dirOf(entry).listFiles()?.forEach { it.delete() }
+        dirOf(entry).delete()
     }
 
     /** Allocatable (may free cache files) rather than merely free, as the platform recommends. */
     override fun freeBytes(): Long = try {
-        storage.getAllocatableBytes(storage.getUuidForPath(dir))
+        storage.getAllocatableBytes(storage.getUuidForPath(root))
     } catch (e: IOException) {
-        dir.usableSpace
+        root.usableSpace
     }
 
-    override fun cachedManifest(): String? = File(dir, MANIFEST).takeIf { it.isFile }?.readText()
+    override fun cachedManifest(): String? = File(root, MANIFEST).takeIf { it.isFile }?.readText()
 
-    override fun cacheManifest(envelope: String) {
-        val tmp = File(dir, "$MANIFEST.tmp")
-        FileOutputStream(tmp).use { out ->
-            out.write(envelope.toByteArray())
-            out.fd.sync()
+    override fun cacheManifest(envelope: String) = writeAtomically(File(root, MANIFEST), envelope)
+
+    companion object {
+        private const val MANIFEST = "models.json"
+        /** Read by the keyboard process to find the voice model (see [SttPointer]). */
+        const val STT_POINTER = "active-stt.json"
+
+        fun root(context: Context) = File(context.noBackupFilesDir, "models")
+
+        fun writeAtomically(target: File, text: String) {
+            val tmp = File(target.parentFile, target.name + ".tmp")
+            FileOutputStream(tmp).use { out ->
+                out.write(text.toByteArray())
+                out.fd.sync()
+            }
+            if (!tmp.renameTo(target)) tmp.delete()
         }
-        if (!tmp.renameTo(File(dir, MANIFEST))) tmp.delete()
-    }
-
-    private companion object {
-        const val MANIFEST = "models.json"
     }
 }
 

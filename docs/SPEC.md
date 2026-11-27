@@ -445,19 +445,22 @@ the message on Android: **IME** = in-process in `ImeController`, **:agent** = fo
 | S→N | `form.fill` | `{values: {key: text}}`, key = autofill hint, field label/id or profile concept (`email`, `givenName`, …). Native matches each value to a field deterministically (`core/editor/FormFill`) and writes it as focus reaches that field (60 s, same app). It never guesses, never fills sensitive fields and never submits | IME |
 | S→N | `clipboard.paste` | `{id}` | IME |
 | S→N | `voice.start` / `voice.stop` / `voice.cancel` | `{refine}` / `{}` / `{}` | IME (STT in Part 3) |
-| S→N | `app.open` / `system.open` | `{route}` / `{target: "ime_settings"\|"ime_picker"\|"notification_access"\|"accessibility"}` | IME / plugin |
+| S→N | `app.open` / `system.open` | `{route}` / `{target: "ime_settings"\|"ime_picker"\|"notification_access"\|"accessibility"\|"microphone"\|"all_files"}`. `microphone` from the companion shows the runtime permission dialog; `all_files` only on `full` builds (ADR-0012) | IME / plugin |
 | S→N | `agent.run` / `agent.cancel` | `AgentRunRequest {runId, agentId, skill, target, params?}` / `{runId}` | :agent |
 | S→N | `tts.speak` / `tts.stop` | `{text}` (≤ 4,000 spoken) / `{}` | :agent |
 | S→N | `clipboard.pin` / `clipboard.delete` | `{id, pinned}` / `{id}` | :agent |
 | S→N | `agents.save` / `agents.delete` | `{agent: AgentDefinition}` / `{id}`; General cannot be deleted | :agent |
 | S→N | `models.download` / `models.cancel` / `models.delete` | `{ids}` (≤ 16) / `{id}` / `{id}`. Companion only; the IME ignores them (ADR-0011) | :agent |
 | S→N | `models.import` | `{}`. Companion only: opens the system file picker; the picked file's descriptor goes to :agent over AIDL and is verified against the signed catalog | plugin → :agent |
+| S→N | `models.use` | `{id}`. Use this installed model for its job (text or voice) instead of the recommended one (ADR-0012) | :agent |
+| S→N | `models.scan` | `{pick?: 'folder'}`. Look for model files already on the phone; `pick: 'folder'` (companion) first opens the folder picker and persists the grant. Results arrive in `models.changed.found` | plugin → :agent |
+| S→N | `models.adopt` | `{id, trust?}`. Copy a found model into app storage: catalog matches are hash-verified; unknown models need `trust: true` after the user confirms | :agent |
 | S→N | `settings.set` | `{key, value}`; `autonomy.consent` is also mirrored natively in the IME. `keyboard.theme`, `keyboard.haptics` and `keyboard.keySounds` are IME-local (they drive native haptics/sounds and the fallback keyboard's theme) and are not forwarded to `:agent` | IME + :agent |
 | S↔N | `hello` | `{shellVersion}` → `Capabilities` | IME / plugin |
 | S↔N | `context.snapshot` | `{scope: "field"\|"screen"\|"visual"}` → `ScreenContext` (rung 0/2 in IME, rung 1 from :agent with `chat.match`; `visual` = rung 3 with the newest live frame `{handle, width, height, preview}`, `unavailable` while capture is off) | IME + :agent |
 | S↔N | `context.scan` | `{direction: "up"\|"down", pages: 1–8}` → `ScreenContext` with `scan {pages, complete, restored}`. User-started only (a tap on the keyboard within 3 s in `play`); refused in secure fields and blocked apps | IME |
 | S↔N | `clipboard.list` / `agents.list` / `system.status` | `{}` → `ClipboardItem[]` / `AgentDefinition[]` / `SystemStatus` | :agent |
-| S↔N | `models.status` | `{}` → `ModelsStatus {tier, source, catalog, catalogDetail?, packs, freeBytes, wifiOnly, resident?}`. From the companion it also lets queued downloads start (transfers begin only from the Models screen) | :agent |
+| S↔N | `models.status` | `{}` → `ModelsStatus {tier, source, catalog, catalogDetail?, packs, freeBytes, wifiOnly, resident?, device?, found?, scan?, micGranted?}` (packs carry `fit`, `fitDetail`, `active`, `custom`). From the companion it also lets queued downloads start (transfers begin only from the Models screen) | :agent |
 | N→S | `editor.start` / `editor.state` / `editor.finish` | `{field, state}` / `{before, after, selected}` (≤ 1 per frame, ≤ 2,000 chars a side) / `{}` | IME |
 | N→S | `suggestions.update` / `insight.update` | `{items}` / `{insight \| null}` | IME |
 | N→S | `agent.token` / `agent.done` / `agent.error` | `{runId, delta}` / `AgentRunResult` / `{runId, code, message}` | :agent (via IME) |
@@ -700,6 +703,15 @@ The manifest is an ECDSA P-256 signed envelope with rotatable key ids, and URLs 
 Models are never committed to git or bundled in the APK. Licences are surfaced in-app (Gemma Terms vs
 Apache-2.0 vs LFM). Implementation and rationale: ADR-0011.
 
+Each model is recommended per phone rather than per tier alone (ADR-0012). The app reads RAM, cores
+and GPU, estimates decode speed (replaced by measured speed once known), and recommends for each job
+the smartest model that stays comfortable in memory and at least 10 tok/s. Every model gets a fit:
+`recommended`, `good`, `slow` (allowed after a warning) or `too_big` (refused). The user can switch
+the model used for each job (`models.use`). Model files already on the phone are found
+(`models.scan`) and copied in (`models.adopt`). Catalog matches are verified against the signed
+hashes; unknown models need explicit trust and are never recommended. Catalog schema 2 allows models
+made of several files (speech: encoder, decoder, joiner, tokens, VAD).
+
 ---
 
 ## 13. Speech pipeline
@@ -714,6 +726,11 @@ mic (AudioRecord 16 kHz mono, VOICE_RECOGNITION source)
  → shell: voice.partial → composing text  |  voice.final → commit
  → optional P0 refine (punctuation, fillers, casing) via LLM → text.replace of the final span
 ```
+- Implemented (ADR-0012): sherpa-onnx streaming zipformer plus Silero VAD in the IME process.
+  Models (zipformer-en-20m about 46 MB, zipformer2-en about 75 MB) download from Hugging Face after
+  install through the signed catalog; none are in the APK. Endpointing splits speech into segments
+  that are inserted as they end. All-caps model output is case-tidied against the text before the
+  cursor. Voice commands, `refine` and other languages are still to come.
 - Engine choice per language: system `SpeechRecognizer` with `EXTRA_PREFER_OFFLINE` when an offline
   language pack exists (0 MB). sherpa model packs are used otherwise. Whisper is excluded from the live path (not streaming [R5]).
 - Audio is never written to disk. Buffers are zeroed after use.

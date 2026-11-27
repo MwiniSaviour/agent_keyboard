@@ -280,7 +280,11 @@ export interface SystemStatus {
   autonomyConsent: boolean;
 }
 
-export type SystemSettingsTarget = 'ime_settings' | 'ime_picker' | 'notification_access' | 'accessibility';
+/**
+ * `microphone`: the app's permission page (voice typing needs RECORD_AUDIO; the IME can't ask).
+ * `all_files`: all-files access so the model scan reaches all shared storage (`full` flavor only).
+ */
+export type SystemSettingsTarget = 'ime_settings' | 'ime_picker' | 'notification_access' | 'accessibility' | 'microphone' | 'all_files';
 
 export interface Capabilities {
   protocol: number;
@@ -323,7 +327,7 @@ export interface ModelPack {
   /** SPDX id or licence name (Gemma Terms, Apache-2.0, …), surfaced in-app (SPEC §12.6). */
   license: string;
   licenseUrl?: string;
-  /** Part of this tier's core pack. */
+  /** The pick for this phone (same as `fit === 'recommended'`). */
   core: boolean;
   state: ModelPackState;
   /** Bytes on disk (partial or complete). */
@@ -332,6 +336,55 @@ export interface ModelPack {
   detail?: string;
   /** Installed, and the signed catalog now lists a newer build of it. */
   updateAvailable?: boolean;
+  /** How it suits this phone's memory and speed (ADR-0012); `fitDetail` says why in one line. */
+  fit?: ModelFit;
+  fitDetail?: string;
+  /** Installed and the model used for its job (text or voice); `models.use` changes it. */
+  active?: boolean;
+  /** Found on the phone, not in the signed catalog: the user chose to trust it. */
+  custom?: boolean;
+}
+
+/**
+ * `recommended`: the smartest model that runs smoothly here. `good`: runs well, a different
+ * trade-off. `slow`: fits but slow or memory-hungry (allowed, with a warning). `too_big`: refused.
+ */
+export type ModelFit = 'recommended' | 'good' | 'slow' | 'too_big';
+
+/** What the recommendations were based on. `ramLabel` is RAM as sold ("8 GB"). */
+export interface DeviceInfo {
+  ramMb: number;
+  ramLabel: string;
+  gpu: boolean;
+  soc?: string;
+}
+
+/**
+ * A model file already on the phone (ADR-0012). `verified`: it matches a catalog entry by name and
+ * size, and is installed only if every byte hashes to the signed catalog. Otherwise it is an unknown
+ * model the user may choose to trust (`models.adopt {trust: true}`). Either way it is copied, never
+ * loaded in place.
+ */
+export interface FoundModel {
+  id: string;
+  name: string;
+  kind: ModelKind;
+  sizeBytes: number;
+  /** Human-readable folder ("Download"). */
+  where: string;
+  verified: boolean;
+  entryId?: string;
+}
+
+/**
+ * Where the scan may look: `app` (this app's own folders and Downloads it can see), `folders` (plus
+ * folders the user granted), `all` (all-files access). `allFilesOption`: this build can ask for it.
+ */
+export interface ModelScan {
+  state: 'idle' | 'scanning';
+  access: 'app' | 'folders' | 'all';
+  folders: number;
+  allFilesOption: boolean;
 }
 
 /**
@@ -354,4 +407,11 @@ export interface ModelsStatus {
   wifiOnly: boolean;
   /** The generative model currently in memory and the backend it runs on (one at a time, ADR-0004). */
   resident?: { id: string; backend: 'npu' | 'gpu' | 'cpu' };
+  device?: DeviceInfo;
+  /** Models found on the phone and not installed yet (omitted when none). */
+  found?: FoundModel[];
+  /** Absent where the host can't scan. */
+  scan?: ModelScan;
+  /** RECORD_AUDIO is granted. */
+  micGranted?: boolean;
 }

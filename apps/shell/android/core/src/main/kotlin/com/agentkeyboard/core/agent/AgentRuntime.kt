@@ -248,6 +248,9 @@ class AgentRuntime(
             is Command.ModelsDownload -> models?.download(command.ids)
             is Command.ModelsCancel -> models?.cancel(command.id)
             is Command.ModelsDelete -> models?.delete(command.id)
+            is Command.ModelsUse -> models?.use(command.id)
+            is Command.ModelsScan -> models?.scan()
+            is Command.ModelsAdopt -> models?.adopt(command.id, command.trust)
             is Command.TtsSpeak -> speech.speak(command.text.take(MAX_TTS_CHARS))
             Command.TtsStop -> speech.stop()
             is Command.ClipboardPin -> clipboard.all().firstOrNull { it.item.id == command.id }?.let {

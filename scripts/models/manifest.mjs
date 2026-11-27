@@ -8,8 +8,11 @@
  *
  *   build   --catalog models/catalog.json --key <private.pem> --key-id <id> --out models.json
  *           [--files <dir>]   use local copies (by file name) instead of streaming each url
- *           Measures every model's exact size and SHA-256 (streaming; nothing is stored), writes
- *           the manifest and signs it. Set HF_TOKEN for gated Hugging Face repos.
+ *           Measures every file's exact size and SHA-256 (streaming; nothing is stored), writes
+ *           the manifest (schema 2) and signs it. Set HF_TOKEN for gated Hugging Face repos.
+ *           Entries name files either as one `url` (already pinned to a commit) or as
+ *           `hf: {repo, revision}` + `files: [{name}]`; a branch revision ("main") is resolved to its
+ *           commit through the Hugging Face API, so the signed manifest never points at a moving ref.
  *
  *   sign    --manifest <manifest.json> --key <private.pem> --key-id <id> --out models.json
  *   verify  --signed models.json --public <base64 SPKI> --key-id <id>
@@ -78,24 +81,59 @@ async function measureFile(path) {
   return { sha256: hash.digest('hex'), sizeBytes: size };
 }
 
-const ENTRY_KEYS = ['id', 'kind', 'name', 'role', 'file', 'url', 'license', 'licenseUrl', 'tiers', 'coreFor', 'capabilities', 'backends', 'runtime', 'contextTokens', 'ramMb', 'minAppVersion'];
+const ENTRY_KEYS = [
+  'id', 'kind', 'name', 'role', 'license', 'licenseUrl', 'tiers', 'coreFor', 'capabilities', 'backends', 'runtime',
+  'contextTokens', 'ramMb', 'minAppVersion', 'quality', 'config',
+];
+const PINNED = /\/resolve\/[0-9a-f]{40}\//;
+
+/** Commit sha for a Hugging Face branch or tag (a 40-hex revision is already a commit). */
+export async function resolveRevision(repo, revision) {
+  if (/^[0-9a-f]{40}$/.test(revision)) return revision;
+  const headers = process.env.HF_TOKEN ? { authorization: `Bearer ${process.env.HF_TOKEN}` } : {};
+  const res = await fetch(`https://huggingface.co/api/models/${repo}/revision/${encodeURIComponent(revision)}`, { headers });
+  if (!res.ok) throw new Error(`${repo}@${revision} → HTTP ${res.status}`);
+  const sha = (await res.json()).sha;
+  if (!/^[0-9a-f]{40}$/.test(sha ?? '')) throw new Error(`${repo}@${revision}: no commit sha in the API response`);
+  return sha;
+}
+
+/** The pinned URL of every file of a catalog entry. */
+export async function fileUrls(m) {
+  if (m.url) {
+    if (!PINNED.test(m.url) && m.url.startsWith('https://huggingface.co/')) throw new Error(`${m.id}: url must be pinned to a commit`);
+    return [{ name: m.file, url: m.url, approxBytes: m.approxBytes }];
+  }
+  if (!m.hf?.repo || !m.files?.length) throw new Error(`${m.id}: needs url, or hf + files`);
+  const commit = m.files.every((f) => f.url) ? null : await resolveRevision(m.hf.repo, m.hf.revision ?? 'main');
+  return m.files.map((f) => ({
+    name: f.name,
+    // A file may come from elsewhere (e.g. the shared VAD model): its SHA-256 is signed all the same.
+    url: f.url ?? `https://huggingface.co/${m.hf.repo}/resolve/${commit}/${f.path ?? f.name}`,
+    approxBytes: f.approxBytes,
+  }));
+}
 
 async function build(o) {
   const catalog = JSON.parse(readFileSync(need(o, 'catalog'), 'utf8'));
   const key = createPrivateKey(readFileSync(need(o, 'key')));
   const models = [];
   for (const m of catalog.models) {
-    const local = o.files ? join(o.files, m.file) : null;
-    process.stderr.write(`▸ ${m.id}: ${local && existsSync(local) ? local : m.url}\n`);
-    const measured = local && existsSync(local) ? await measureFile(local) : await measureUrl(m.url);
-    if (m.approxBytes && Math.abs(measured.sizeBytes - m.approxBytes) > m.approxBytes * 0.1) {
-      process.stderr.write(`  ! size ${measured.sizeBytes} differs from approxBytes ${m.approxBytes} by >10%\n`);
+    const files = [];
+    for (const f of await fileUrls(m)) {
+      const local = o.files ? join(o.files, f.name) : null;
+      process.stderr.write(`▸ ${m.id}/${f.name}: ${local && existsSync(local) ? local : f.url}\n`);
+      const measured = local && existsSync(local) ? await measureFile(local) : await measureUrl(f.url);
+      if (f.approxBytes && Math.abs(measured.sizeBytes - f.approxBytes) > f.approxBytes * 0.1) {
+        process.stderr.write(`  ! size ${measured.sizeBytes} differs from approxBytes ${f.approxBytes} by >10%\n`);
+      }
+      files.push({ name: f.name, url: f.url, ...measured });
+      process.stderr.write(`  ${measured.sizeBytes} bytes · sha256 ${measured.sha256}\n`);
     }
     const entry = Object.fromEntries(ENTRY_KEYS.filter((k) => m[k] !== undefined).map((k) => [k, m[k]]));
-    models.push({ ...entry, ...measured });
-    process.stderr.write(`  ${measured.sizeBytes} bytes · sha256 ${measured.sha256}\n`);
+    models.push({ ...entry, files });
   }
-  const manifest = { schema: catalog.schema ?? 1, issuedAt: Number(o['issued-at'] ?? Date.now()), models };
+  const manifest = { schema: 2, issuedAt: Number(o['issued-at'] ?? Date.now()), models };
   writeFileSync(need(o, 'out'), JSON.stringify(envelope(manifest, key, need(o, 'key-id')), null, 2) + '\n');
   process.stderr.write(`✓ wrote ${o.out} (${models.length} models)\n`);
 }
@@ -104,15 +142,16 @@ function fixture() {
   const { privateKey, publicKey } = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
   const keyId = 'ak-test';
   const sha = (s) => createHash('sha256').update(s).digest('hex');
+  const stt = ['encoder.int8.onnx', 'decoder.onnx', 'joiner.int8.onnx', 'tokens.txt'];
   const manifest = {
-    schema: 1,
+    schema: 2,
     issuedAt: 1764201600000,
     models: [
       {
         id: 'gemma-3-1b-it-int4', kind: 'llm', name: 'Gemma 3 1B', role: 'Replies, rewriting, explanations and definitions',
         file: 'gemma3-1b-it-int4.litertlm', url: 'https://example.invalid/gemma3-1b-it-int4.litertlm',
         license: 'Gemma Terms of Use', licenseUrl: 'https://ai.google.dev/gemma/terms', tiers: ['S'], coreFor: ['S'],
-        capabilities: ['text'], backends: ['cpu', 'gpu'], runtime: 'litertlm', contextTokens: 1024, ramMb: 900, minAppVersion: 1,
+        capabilities: ['text'], backends: ['cpu', 'gpu'], runtime: 'litertlm', contextTokens: 1024, ramMb: 900, minAppVersion: 1, quality: 40,
         // Test vector: the bytes are the ASCII string "gemma-test-bytes".
         sha256: sha('gemma-test-bytes'), sizeBytes: 16,
       },
@@ -120,8 +159,16 @@ function fixture() {
         id: 'gemma-4-e2b-it', kind: 'llm', name: 'Gemma 4 E2B', role: 'Text, vision and audio in one model',
         file: 'gemma-4-E2B-it.litertlm', url: 'https://example.invalid/gemma-4-E2B-it.litertlm',
         license: 'Apache-2.0', tiers: ['M', 'L'], coreFor: ['M', 'L'], capabilities: ['text', 'vision', 'audio'],
-        backends: ['cpu', 'gpu'], runtime: 'litertlm', contextTokens: 4000, ramMb: 1500, minAppVersion: 1,
+        backends: ['cpu', 'gpu'], runtime: 'litertlm', contextTokens: 4000, ramMb: 1500, minAppVersion: 1, quality: 70,
         sha256: sha('e2b-test-bytes'), sizeBytes: 14,
+      },
+      {
+        // Multi-file (schema 2): a sherpa-onnx streaming transducer. File i's bytes are "stt-<name>".
+        id: 'zipformer-en-20m', kind: 'stt', name: 'Zipformer streaming (English)', role: 'Voice typing, on this phone',
+        license: 'Apache-2.0', tiers: ['S', 'M', 'L'], capabilities: ['transcribe'], runtime: 'sherpa-onnx', ramMb: 120,
+        minAppVersion: 1, quality: 55,
+        config: { encoder: stt[0], decoder: stt[1], joiner: stt[2], tokens: stt[3], modelType: 'zipformer' },
+        files: stt.map((name) => ({ name, url: `https://example.invalid/stt/${name}`, sha256: sha(`stt-${name}`), sizeBytes: `stt-${name}`.length })),
       },
     ],
   };
@@ -158,7 +205,10 @@ async function main() {
     case 'verify': {
       const m = open(JSON.parse(readFileSync(need(o, 'signed'), 'utf8')), need(o, 'public'), need(o, 'key-id'));
       process.stdout.write(`✓ signature ok · schema ${m.schema} · ${m.models.length} models · issued ${new Date(m.issuedAt).toISOString()}\n`);
-      for (const e of m.models) process.stdout.write(`  ${e.id}  ${e.sizeBytes} B  tiers ${e.tiers.join('')}  ${e.sha256}\n`);
+      for (const e of m.models) {
+        const files = e.files ?? [{ name: e.file, sizeBytes: e.sizeBytes, sha256: e.sha256 }];
+        process.stdout.write(`  ${e.id}  ${files.reduce((n, f) => n + f.sizeBytes, 0)} B  ${files.length} file(s)  quality ${e.quality ?? '-'}\n`);
+      }
       break;
     }
     case 'fixture':

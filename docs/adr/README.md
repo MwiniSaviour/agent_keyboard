@@ -16,3 +16,4 @@ supersede with a new ADR instead of editing. Reference the ADR in PRs that imple
 | [0009](0009-native-host-implementation.md) | Native host implementation: pure-Kotlin core, fail-closed gates, single-flight `:agent`, no-SDK verification | Accepted |
 | [0010](0010-live-screen-and-scroll-and-read.md) | Live screen pixels (MediaProjection, in-RAM ring) and user-started scroll-and-read | Accepted |
 | [0011](0011-on-device-model-runtime.md) | On-device model runtime: signed catalog, own resumable installer, scheduler, LiteRT-LM prefix cache | Accepted |
+| [0012](0012-speech-recommendation-and-discovery.md) | sherpa-onnx voice typing in the IME, per-phone model recommendations, finding and adopting models already on the phone | Accepted |

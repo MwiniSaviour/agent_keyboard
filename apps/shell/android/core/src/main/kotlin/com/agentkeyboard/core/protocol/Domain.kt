@@ -152,6 +152,10 @@ data class SystemStatus(
 enum class SystemSettingsTarget(override val wire: String) : WireEnum {
     IME_SETTINGS("ime_settings"), IME_PICKER("ime_picker"),
     NOTIFICATION_ACCESS("notification_access"), ACCESSIBILITY("accessibility"),
+    /** Voice typing needs RECORD_AUDIO; the companion asks, the IME opens the app's settings page. */
+    MICROPHONE("microphone"),
+    /** `full` flavor only: all-files access, so the scan can find models anywhere in shared storage. */
+    ALL_FILES("all_files"),
 }
 
 data class ClipboardItem(val id: String, val text: String, val pinned: Boolean, val at: Long) : JsonEncodable {
@@ -362,11 +366,19 @@ data class ModelPack(
     val receivedBytes: Long,
     val detail: String? = null,
     val updateAvailable: Boolean? = null,
+    /** `recommended` | `good` | `slow` | `too_big` for this phone (ADR-0012). */
+    val fit: String? = null,
+    val fitDetail: String? = null,
+    /** Installed and the model used for its job (text or voice). */
+    val active: Boolean? = null,
+    /** Found on the phone, not in the signed catalog; the user chose to trust it. */
+    val custom: Boolean? = null,
 ) : JsonEncodable {
     override fun toJson(): JsonObj = obj(
         "id" to id, "name" to name, "kind" to kind, "role" to role, "sizeBytes" to sizeBytes,
         "license" to license, "licenseUrl" to licenseUrl, "core" to core, "state" to state,
         "receivedBytes" to receivedBytes, "detail" to detail, "updateAvailable" to updateAvailable,
+        "fit" to fit, "fitDetail" to fitDetail, "active" to active, "custom" to custom,
     )
 
     companion object {
@@ -383,6 +395,33 @@ data class ResidentModel(val id: String, val backend: String) : JsonEncodable {
     override fun toJson(): JsonObj = obj("id" to id, "backend" to backend)
 }
 
+/** `DeviceInfo` in domain.ts: what the recommendations were based on. */
+data class DeviceInfo(val ramMb: Int, val ramLabel: String, val gpu: Boolean, val soc: String?) : JsonEncodable {
+    override fun toJson(): JsonObj = obj("ramMb" to ramMb, "ramLabel" to ramLabel, "gpu" to gpu, "soc" to soc)
+}
+
+/** `FoundModel` in domain.ts: a model file already on the phone. */
+data class FoundModelInfo(
+    val id: String,
+    val name: String,
+    val kind: String,
+    val sizeBytes: Long,
+    val where: String,
+    /** Matches a catalog entry (its bytes are checked on copy). False: unverified, needs the user's trust. */
+    val verified: Boolean,
+    val entryId: String? = null,
+) : JsonEncodable {
+    override fun toJson(): JsonObj = obj(
+        "id" to id, "name" to name, "kind" to kind, "sizeBytes" to sizeBytes, "where" to where,
+        "verified" to verified, "entryId" to entryId,
+    )
+}
+
+/** `ModelScan` in domain.ts. */
+data class ModelScanInfo(val state: String, val access: String, val folders: Int, val allFilesOption: Boolean = false) : JsonEncodable {
+    override fun toJson(): JsonObj = obj("state" to state, "access" to access, "folders" to folders, "allFilesOption" to allFilesOption)
+}
+
 /** `ModelsStatus` in domain.ts. */
 data class ModelsStatus(
     val tier: DeviceTier,
@@ -393,9 +432,14 @@ data class ModelsStatus(
     val freeBytes: Long,
     val wifiOnly: Boolean,
     val resident: ResidentModel?,
+    val device: DeviceInfo? = null,
+    val found: List<FoundModelInfo> = emptyList(),
+    val scan: ModelScanInfo? = null,
+    val micGranted: Boolean? = null,
 ) : JsonEncodable {
     override fun toJson(): JsonObj = obj(
         "tier" to tier.wire, "source" to source, "catalog" to catalog, "catalogDetail" to catalogDetail,
         "packs" to packs, "freeBytes" to freeBytes, "wifiOnly" to wifiOnly, "resident" to resident,
+        "device" to device, "found" to found.ifEmpty { null }, "scan" to scan, "micGranted" to micGranted,
     )
 }

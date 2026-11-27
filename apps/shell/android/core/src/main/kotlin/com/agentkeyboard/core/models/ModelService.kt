@@ -1,27 +1,37 @@
 package com.agentkeyboard.core.models
 
 import com.agentkeyboard.core.agent.SettingsStore
+import com.agentkeyboard.core.json.JsonNum
 import com.agentkeyboard.core.json.JsonObj
 import com.agentkeyboard.core.json.JsonValue
 import com.agentkeyboard.core.json.arr
 import com.agentkeyboard.core.json.arrOrNull
 import com.agentkeyboard.core.json.bool
+import com.agentkeyboard.core.json.JsonStr
+import com.agentkeyboard.core.json.num
 import com.agentkeyboard.core.json.long
 import com.agentkeyboard.core.json.obj
 import com.agentkeyboard.core.json.objOrNull
 import com.agentkeyboard.core.json.str
+import com.agentkeyboard.core.protocol.DeviceInfo
 import com.agentkeyboard.core.protocol.DeviceTier
+import com.agentkeyboard.core.protocol.FoundModelInfo
 import com.agentkeyboard.core.protocol.ModelPack
 import com.agentkeyboard.core.protocol.ModelsStatus
 import com.agentkeyboard.core.protocol.ResidentModel
+import com.agentkeyboard.core.protocol.ModelScanInfo
 import java.io.IOException
 import java.io.InputStream
 import java.util.concurrent.Executor
 
-/** A verified model file on disk, with the manifest entry that describes it. */
-data class InstalledModel(val entry: ModelEntry, val path: String)
+/** A verified model on disk: its entry and its directory. */
+data class InstalledModel(val entry: ModelEntry, val path: String) {
+    fun file(name: String): String = "$path/$name"
+    /** The primary file (LiteRT-LM models are a single file). */
+    val primary: String get() = file(entry.file)
+}
 
-/** What the engine asks for; implemented by [ModelService]. Thread-safe (read from the engine thread). */
+/** What the runtimes ask for; implemented by [ModelService]. Thread-safe (read from engine/IME threads). */
 fun interface InstalledModels {
     fun pick(capability: Capability): InstalledModel?
 }
@@ -33,11 +43,12 @@ interface NetworkState {
 }
 
 /**
- * Model packs on this phone (SPEC §12.6, ADR-0011): the signed catalog, which packs the tier needs,
- * the download queue, verified installs, and the `ModelsStatus` the companion renders.
+ * Model packs on this phone (SPEC §12.6, ADR-0011, ADR-0012): the signed catalog, what this device
+ * should run ([Recommender]), the download queue, models found on the phone, verified installs, the
+ * model the user chose for each job, and the `ModelsStatus` the companion renders.
  *
- * Threading: like `AgentRuntime`, every public method runs on [serial]; transfers run on [io] and hop
- * back. [pick] is the one exception: it reads an immutable snapshot and may be called from any thread.
+ * Threading: like `AgentRuntime`, every public method runs on [serial]; transfers and scans run on [io]
+ * and hop back. [pick] is the one exception: it reads an immutable snapshot from any thread.
  */
 class ModelService(
     private val tier: DeviceTier,
@@ -58,12 +69,18 @@ class ModelService(
     /** An installed model was deleted; the engine unloads it when idle. */
     private val onRemoved: (String) -> Unit = {},
     private val residency: () -> ResidentModel? = { null },
+    /** The real hardware; drives recommendations instead of the tier table. */
+    private val specs: DeviceSpecs = DeviceSpecs(totalRamMb = 6_144, cpuCores = 8, gpu = false),
+    /** Lists model files already on the phone; null where the host can't (tests, web). */
+    private val scanner: ModelScanner? = null,
+    /** RECORD_AUDIO is granted (voice typing needs it; the IME can't ask). */
+    private val micGranted: () -> Boolean = { false },
     private val clock: () -> Long = System::currentTimeMillis,
     private val log: (String) -> Unit = {},
     private val installer: ModelInstaller = ModelInstaller(files, http),
 ) : InstalledModels {
 
-    private class Job(val entry: ModelEntry, val import: Boolean) {
+    private class Job(val entry: ModelEntry, val import: Boolean, val found: FoundModel? = null) {
         @Volatile var stop = false
         @Volatile var userCancelled = false
         /** Deleted while running: whatever it wrote is discarded when it stops. */
@@ -81,22 +98,36 @@ class ModelService(
     private var fetching = false
     private var lastFetch = 0L
     private val installed = LinkedHashMap<String, Record>()
+    /** Unverified models the user chose to trust, by id (persisted; not in any catalog). */
+    private val custom = LinkedHashMap<String, ModelEntry>()
     private val notes = HashMap<String, Note>()
     private val queue = ArrayList<String>()
     private var running: Job? = null
     private var transferring = false
     /** Non-null: transfers are held (FGS time limit, shutdown) until the Models screen is opened again. */
     private var suspended: String? = null
-
-    /** Outcome of the last import that didn't start (shown on the Models screen until the next one). */
+    /** Outcome of the last import/adopt that didn't start (shown on the Models screen until the next one). */
     private var importNote: String? = null
+
+    private var found: List<FoundModel> = emptyList()
+    private var scanning = false
+    private var lastScan = 0L
+    private var scanAccess = ACCESS_APP
+    private var scanFolders = 0
+    private var scanAllOption = false
+
+    /** Decode tokens/s measured on this phone, by model id (smoothed). */
+    private val speed = HashMap<String, Double>()
+    /** The model the user chose per job (`text`, `transcribe`); otherwise the best installed one is used. */
+    private val active = HashMap<String, String>()
+    private var advice: Map<String, Advice> = emptyMap()
 
     @Volatile private var snapshot: List<InstalledModel> = emptyList()
     @Volatile private var wifiOnly = true
 
     // ───────────────────────────── lifecycle ─────────────────────────────
 
-    /** Loads the cached catalog and install records. No network. Call once on the serial thread. */
+    /** Loads the cached catalog and records. No network, no scan. Call once on the serial thread. */
     fun start() {
         wifiOnly = settings.get(KEY_WIFI_ONLY).bool() ?: true
         settings.get(KEY_INSTALLED).objOrNull()?.fields?.forEach { (id, v) ->
@@ -104,6 +135,9 @@ class ModelService(
             val sha = o["sha256"].str() ?: return@forEach
             installed[id] = Record(sha, o["at"].long() ?: 0L)
         }
+        settings.get(KEY_CUSTOM).arrOrNull()?.items?.forEach { v -> decodeCustom(v)?.let { custom[it.id] = it } }
+        settings.get(KEY_SPEED).objOrNull()?.fields?.forEach { (id, v) -> v.num()?.let { speed[id] = it } }
+        settings.get(KEY_ACTIVE).objOrNull()?.fields?.forEach { (job, v) -> v.str()?.let { active[job] = it } }
         settings.get(KEY_QUEUE).arrOrNull()?.items?.mapNotNullTo(queue) { it.str() }
         val cached = files.cachedManifest()
         when {
@@ -117,19 +151,20 @@ class ModelService(
     }
 
     /**
-     * The companion is showing the Models screen: refresh a stale catalog and resume a queue left by
-     * a previous process. Starting transfers only from here keeps the dataSync FGS start legal (the
-     * app has a visible activity) and never surprises the user with background traffic.
+     * The companion is showing the Models screen: refresh a stale catalog, look for models already on
+     * the phone, and resume a queue left by a previous process. Starting transfers only from here keeps
+     * the dataSync FGS start legal (the app has a visible activity) and never surprises the user.
      */
     fun onVisible() {
         suspended = null
         refreshCatalog(force = false)
+        if (clock() - lastScan >= RESCAN_MS || lastScan == 0L) scan()
         kick()
     }
 
     /**
      * Holds all transfers (Android 15's dataSync time limit, process shutdown). The running one stops
-     * at the next chunk and keeps its partial file; the queue resumes from [onVisible].
+     * at the next chunk and keeps its partial files; the queue resumes from [onVisible].
      */
     fun suspend(reason: String) {
         suspended = reason
@@ -148,30 +183,38 @@ class ModelService(
 
     // ───────────────────────────── queries ─────────────────────────────
 
-    override fun pick(capability: Capability): InstalledModel? {
-        val candidates = snapshot.filter { it.entry.generative && capability in it.entry.capabilities }
-        // Text prefers a plain LLM over a VLM (Tier S keeps the VLM for on-demand vision only); within
-        // a kind, the largest model allowed on this tier wins (an installed optional E4B beats E2B).
-        val primary = if (capability == Capability.VISION) ModelKind.VLM else ModelKind.LLM
-        return candidates.sortedWith(
-            compareByDescending<InstalledModel> { tier in it.entry.tiers }
-                .thenByDescending { it.entry.kind == primary || capability == Capability.VISION }
-                .thenByDescending { it.entry.ramMb },
-        ).firstOrNull()
-    }
+    /**
+     * The model to run for [capability]: the one the user chose for that job if installed and able,
+     * else the best installed one for this phone (recommended first, then smartest that fits).
+     */
+    override fun pick(capability: Capability): InstalledModel? =
+        snapshot.firstOrNull { capability in it.entry.capabilities && (capability == Capability.TRANSCRIBE || it.entry.generative) }
 
-    /** A generative model for this tier is installed (`SystemStatus.modelsInstalled`). */
+    /** A generative model is installed (`SystemStatus.modelsInstalled`). */
     fun hasTextModel(): Boolean = pick(Capability.TEXT) != null
 
+    /** Every entry the screen may list: the catalog (for this app version) plus trusted custom models. */
+    private fun entries(): List<ModelEntry> =
+        manifest?.entries.orEmpty().filter { it.minAppVersion <= appVersion || it.id in installed } + custom.values
+
+    private fun entry(id: String): ModelEntry? = custom[id] ?: manifest?.entry(id)
+
+    private fun jobOf(e: ModelEntry) = if (e.kind == ModelKind.STT) JOB_TRANSCRIBE else JOB_TEXT
+
     fun status(): ModelsStatus {
-        val m = manifest
-        val entries = m?.entries.orEmpty().filter { e ->
-            (tier in e.tiers && e.minAppVersion <= appVersion) || e.id in installed
-        }
-        val packs = entries.map { pack(it) }.sortedWith(compareByDescending<ModelPack> { it.core }.thenBy { KIND_ORDER.indexOf(it.kind) })
+        val packs = entries().map { pack(it) }.sortedWith(
+            compareBy<ModelPack> { FIT_ORDER.indexOf(it.fit) }.thenBy { KIND_ORDER.indexOf(it.kind) }
+                .thenByDescending { entry(it.id)?.quality ?: 0 },
+        )
         return ModelsStatus(
             tier = tier, source = source, catalog = catalog, catalogDetail = catalogDetail ?: importNote, packs = packs,
             freeBytes = files.freeBytes(), wifiOnly = wifiOnly, resident = residency(),
+            device = DeviceInfo(specs.totalRamMb, Recommender.marketedGb(specs.totalRamMb), specs.gpu, specs.soc),
+            found = found.filter { it.id != running?.found?.id }.map { f ->
+                FoundModelInfo(f.id, f.name, f.kind.wire, f.sizeBytes, f.where, verified = f.entryId != null, entryId = f.entryId)
+            },
+            scan = if (scanner == null) null else ModelScanInfo(if (scanning) "scanning" else "idle", scanAccess, scanFolders, scanAllOption),
+            micGranted = micGranted(),
         )
     }
 
@@ -179,37 +222,51 @@ class ModelService(
         val rec = installed[e.id]
         val job = running?.takeIf { it.entry.id == e.id }
         val note = notes[e.id]
+        val onDisk = files.bytesOnDisk(e)
         val (state, received, detail) = when {
-            job != null -> Triple(ModelPack.DOWNLOADING, job.received, if (job.import) "Installing from file" else null)
-            e.id in queue -> Triple(ModelPack.QUEUED, files.partialLength(e), note?.detail)
-            note?.state == ModelPack.FAILED -> Triple(ModelPack.FAILED, files.partialLength(e), note.detail)
+            job != null -> Triple(ModelPack.DOWNLOADING, job.received, if (job.import) "Copying and verifying" else null)
+            e.id in queue -> Triple(ModelPack.QUEUED, onDisk, note?.detail)
+            note?.state == ModelPack.FAILED -> Triple(ModelPack.FAILED, onDisk, note.detail)
             rec != null -> Triple(ModelPack.INSTALLED, e.sizeBytes, null)
-            files.partialLength(e) > 0 -> Triple(ModelPack.PAUSED, files.partialLength(e), note?.detail ?: "Paused")
+            onDisk > 0 -> Triple(ModelPack.PAUSED, onDisk, note?.detail ?: "Paused")
             else -> Triple(ModelPack.AVAILABLE, 0L, null)
         }
+        val a = advice[e.id]
+        val chosen = rec != null && snapshot.firstOrNull { jobOf(it.entry) == jobOf(e) }?.entry?.id == e.id
         return ModelPack(
             id = e.id, name = e.name, kind = e.kind.wire, role = e.role, sizeBytes = e.sizeBytes, license = e.license,
-            licenseUrl = e.licenseUrl, core = tier in e.coreFor, state = state, receivedBytes = received, detail = detail,
-            updateAvailable = if (rec != null && rec.sha256 != e.sha256) true else null,
+            licenseUrl = e.licenseUrl, core = a?.fit == Fit.RECOMMENDED, state = state, receivedBytes = received, detail = detail,
+            updateAvailable = if (rec != null && !e.custom && rec.sha256 != e.sha256) true else null,
+            fit = a?.fit?.wire, fitDetail = a?.detail, active = if (chosen) true else null, custom = if (e.custom) true else null,
         )
     }
 
     // ───────────────────────────── commands ─────────────────────────────
 
-    /** Queues [ids] (in order). Unknown ids, other tiers' packs and up-to-date installs are skipped. */
+    /** Queues [ids] (in order). Unknown ids, models too big for this phone and up-to-date installs are skipped. */
     fun download(ids: List<String>) {
         val m = manifest ?: return emit()
         if (source != SOURCE_DOWNLOAD || http == null) return emit()
         suspended = null // the user asked for it, from the Models screen
         for (id in ids) {
             val e = m.entry(id) ?: continue
-            if (tier !in e.tiers || e.minAppVersion > appVersion) continue
+            if (e.minAppVersion > appVersion || advice[id]?.fit == Fit.TOO_BIG) continue
             if (installed[id]?.sha256 == e.sha256) continue
             if (id !in queue) queue += id
             notes.remove(id)
         }
         persistQueue()
         kick()
+        emit()
+    }
+
+    /** The user picked [id] for its job (text or voice). Takes effect on the next run. */
+    fun use(id: String) {
+        val e = entry(id) ?: return
+        if (id !in installed) return
+        active[jobOf(e)] = id
+        persistActive()
+        publishSnapshot()
         emit()
     }
 
@@ -227,7 +284,6 @@ class ModelService(
     }
 
     fun delete(id: String) {
-        val m = manifest
         running?.takeIf { it.entry.id == id }?.let {
             it.userCancelled = true
             it.deleted = true
@@ -236,23 +292,26 @@ class ModelService(
         queue.remove(id)
         persistQueue()
         notes.remove(id)
-        val e = m?.entry(id)
+        val e = entry(id)
         if (e != null) {
-            files.deletePartial(e)
-            if (running?.entry?.id != id) files.deleteFinal(e)
+            if (running?.entry?.id != id) files.deleteAll(e) else files.deletePartials(e)
         }
         if (installed.remove(id) != null) {
             persistInstalled()
             onRemoved(id)
         }
+        if (custom.remove(id) != null) persistCustom()
+        if (active.values.remove(id)) persistActive()
+        refreshAdvice()
         publishSnapshot()
         emit()
     }
 
     /**
      * Installs one file picked by the user. A small JSON file is treated as a signed catalog; anything
-     * else must match a catalog entry by file name and then hash to it exactly ([ModelInstaller.import]).
-     * Returns true when [open] will be called (the caller owns the underlying descriptor otherwise).
+     * else must be a file of a catalog entry (by name, or by exact size for a renamed single-file
+     * model) and then hash to it exactly. Returns true when [open] will be called (the caller owns the
+     * underlying descriptor otherwise).
      */
     fun import(name: String, size: Long, open: () -> InputStream): Boolean {
         if (name.endsWith(".json", ignoreCase = true) && size in 1..MAX_MANIFEST_BYTES) {
@@ -280,27 +339,104 @@ class ModelService(
             emit()
             return false
         }
-        val e = m.entries.firstOrNull { it.file.equals(name, ignoreCase = true) }
-            ?: m.entries.singleOrNull { it.sizeBytes == size && tier in it.tiers }
-        if (e == null || running != null) {
-            importNote = if (e == null) "That file isn’t a model in the catalog" else "Wait for the current download to finish"
+        val byName = m.entries.firstNotNullOfOrNull { e -> e.files.firstOrNull { it.name.equals(name, ignoreCase = true) }?.let { e to it } }
+        val target = byName ?: m.entries.singleOrNull { it.files.size == 1 && it.sizeBytes == size }?.let { it to it.files[0] }
+        if (target == null || running != null) {
+            importNote = if (target == null) "That file isn’t a model in the catalog" else "Wait for the current download to finish"
             emit()
             return false
         }
-        val job = Job(e, import = true)
-        running = job
-        notes.remove(e.id)
-        transfer(true)
-        emit()
-        io.execute {
-            val outcome = try {
-                open().use { input -> installer.import(e, input, shouldStop = { job.stop }, onProgress = { n -> progress(job, n) }) }
-            } catch (ex: IOException) {
-                InstallOutcome.Failed("Couldn’t read the file", retryable = true)
-            }
-            serial.execute { finished(job, outcome) }
+        val (e, file) = target
+        start(Job(e, import = true)) { job ->
+            installer.import(e, { f -> if (f === file) open() else null }, shouldStop = { job.stop }, onProgress = { n -> progress(job, n) })
         }
         return true
+    }
+
+    // ───────────────────────────── models already on the phone ─────────────────────────────
+
+    /** Looks for model files in the places this app may read (bounded; runs on [io]). */
+    fun scan() {
+        val s = scanner ?: return
+        if (scanning) return
+        scanning = true
+        emit()
+        io.execute {
+            val r = try {
+                s.scan()
+            } catch (e: Exception) { // a provider misbehaving must not take the service down
+                log("scan failed: ${e.javaClass.simpleName}")
+                null
+            }
+            serial.execute {
+                scanning = false
+                lastScan = clock()
+                if (r != null) {
+                    scanAccess = r.access
+                    scanFolders = r.folders
+                    scanAllOption = r.allFilesOption
+                    found = ModelMatcher.match(manifest?.entries.orEmpty(), r.files, installed.mapValues { it.value.sha256 })
+                    log("scan: ${r.files.size} candidate files, ${found.size} models")
+                }
+                emit()
+            }
+        }
+    }
+
+    /**
+     * Installs a model found by [scan]. Catalog matches are copied through the verifier (used only if
+     * every byte matches the signed hash). An unverified model needs [trust]: the user confirmed that
+     * they want to run a file no catalog vouches for.
+     */
+    fun adopt(id: String, trust: Boolean) {
+        importNote = null
+        val f = found.firstOrNull { it.id == id } ?: return emit()
+        val s = scanner ?: return emit()
+        if (running != null) {
+            importNote = "Wait for the current download to finish"
+            return emit()
+        }
+        val entryId = f.entryId
+        if (entryId != null) {
+            val e = manifest?.entry(entryId) ?: return emit()
+            start(Job(e, import = true, found = f)) { job ->
+                installer.import(e, { mf -> f.refs[mf.name]?.let(s::open) }, shouldStop = { job.stop }, onProgress = { n -> progress(job, n) })
+            }
+            return
+        }
+        if (!trust) {
+            importNote = "Confirm that you trust ${f.name} to use it"
+            return emit()
+        }
+        val provisional = ModelMatcher.customEntry(f, null)
+        custom[provisional.id] = provisional // listed (with progress) while it copies; persisted once measured
+        refreshAdvice()
+        start(Job(provisional, import = true, found = f)) { job ->
+            val (outcome, measured) = s.open(f.refs.values.single()).use { input ->
+                installer.importUnverified(provisional, input, shouldStop = { job.stop }, onProgress = { n -> progress(job, n) })
+            }
+            if (measured != null) pendingCustom = ModelMatcher.customEntry(f, measured)
+            outcome
+        }
+    }
+
+    /** Written on [io] by an unverified adopt, read on [serial] in [finished] (ordered by the executor hop). */
+    @Volatile private var pendingCustom: ModelEntry? = null
+
+    // ───────────────────────────── speed ─────────────────────────────
+
+    /** Decode speed observed by the engine. Smoothed, persisted, and fed back into the advice. */
+    fun recordSpeed(id: String, tokensPerSec: Double) {
+        if (tokensPerSec.isNaN() || tokensPerSec <= 0 || tokensPerSec > 500) return
+        val prev = speed[id]
+        speed[id] = if (prev == null) tokensPerSec else prev * 0.7 + tokensPerSec * 0.3
+        settings.put(KEY_SPEED, JsonObj(speed.mapValues { (_, v) -> JsonNum(Math.round(v * 10) / 10.0) as JsonValue }))
+        val before = advice[id]?.fit
+        refreshAdvice()
+        if (advice[id]?.fit != before) {
+            publishSnapshot()
+            emit()
+        }
     }
 
     // ───────────────────────────── catalog ─────────────────────────────
@@ -327,6 +463,8 @@ class ModelService(
                 if (text != null) applyEnvelope(text, persist = true)
                 else if (manifest == null) setCatalog(CATALOG_UNAVAILABLE, "Couldn’t load the model catalog")
                 reconcile()
+                // A new catalog may recognise files the last scan couldn't.
+                if (text != null && scanner != null && lastScan > 0) scan()
                 emit()
             }
         }
@@ -358,14 +496,14 @@ class ModelService(
         catalogDetail = detail
     }
 
-    /** Drops records whose file vanished and deletes files the catalog no longer lists. */
+    /** Drops records whose files vanished and models the catalog withdrew; recomputes the advice. */
     private fun reconcile() {
         val m = manifest
         var changed = false
         val it = installed.entries.iterator()
         while (it.hasNext()) {
             val (id, _) = it.next()
-            val e = m?.entry(id)
+            val e = entry(id)
             if (m != null && e == null) {
                 // Withdrawn from the signed catalog (licence, safety): remove unless it is in use.
                 if (residency()?.id == id) continue
@@ -374,22 +512,32 @@ class ModelService(
                 changed = true
                 continue
             }
-            if (e != null && files.finalPath(e) == null) {
+            if (e != null && !files.complete(e)) {
                 it.remove()
                 changed = true
             }
         }
         if (changed) persistInstalled()
         queue.retainAll { id -> m == null || m.entry(id) != null }
+        refreshAdvice()
         publishSnapshot()
     }
 
+    private fun refreshAdvice() {
+        advice = Recommender.advise(entries(), specs, speed)
+    }
+
+    /** Installed models in preference order: the user's choice per job, then the advice, then quality. */
     private fun publishSnapshot() {
-        val m = manifest ?: return run { snapshot = emptyList() }
-        snapshot = installed.keys.mapNotNull { id ->
-            val e = m.entry(id) ?: return@mapNotNull null
-            files.finalPath(e)?.let { InstalledModel(e, it) }
+        val list = installed.keys.mapNotNull { id ->
+            val e = entry(id) ?: return@mapNotNull null
+            if (e.minAppVersion > appVersion || !files.complete(e)) null else InstalledModel(e, files.location(e))
         }
+        snapshot = list.sortedWith(
+            compareByDescending<InstalledModel> { active[jobOf(it.entry)] == it.entry.id }
+                .thenBy { FIT_ORDER.indexOf(advice[it.entry.id]?.fit?.wire) }
+                .thenByDescending { it.entry.quality },
+        )
     }
 
     // ───────────────────────────── transfers ─────────────────────────────
@@ -397,6 +545,22 @@ class ModelService(
     private fun allowedNow(): Boolean = network.connected() && (!wifiOnly || network.unmetered())
 
     private fun waitingReason(): String = if (!network.connected()) "Waiting for a connection" else "Waiting for Wi-Fi"
+
+    /** Runs a local install (import or adopt) as the single active job. */
+    private fun start(job: Job, work: (Job) -> InstallOutcome) {
+        running = job
+        notes.remove(job.entry.id)
+        transfer(true)
+        emit()
+        io.execute {
+            val outcome = try {
+                work(job)
+            } catch (ex: IOException) {
+                InstallOutcome.Failed("Couldn’t read the file", retryable = true)
+            }
+            serial.execute { finished(job, outcome) }
+        }
+    }
 
     private fun kick() {
         if (running != null) return
@@ -414,7 +578,7 @@ class ModelService(
             transfer(false)
             return emit()
         }
-        val job = Job(e, import = false).apply { received = files.partialLength(e) }
+        val job = Job(e, import = false).apply { received = files.bytesOnDisk(e) }
         running = job
         notes.remove(id)
         transfer(true)
@@ -438,25 +602,49 @@ class ModelService(
 
     private fun finished(job: Job, outcome: InstallOutcome) {
         if (running === job) running = null
-        val id = job.entry.id
+        var entry = job.entry
+        val id = entry.id
         var resume = true
         if (job.deleted) {
-            // delete() ran while the transfer was stopping: drop whatever it wrote, even a complete file.
+            // delete() ran while the transfer was stopping: drop whatever it wrote, even a complete model.
             queue.remove(id)
             notes.remove(id)
-            files.deletePartial(job.entry)
-            if (outcome is InstallOutcome.Installed) files.deleteFinal(job.entry)
+            files.deleteAll(entry)
+            pendingCustom = null
+            if (entry.custom) custom.remove(id)
             persistQueue()
+            refreshAdvice()
             publishSnapshot()
             kick()
             return emit()
         }
         when (outcome) {
             is InstallOutcome.Installed -> {
+                if (entry.custom) {
+                    entry = pendingCustom ?: run {
+                        custom.remove(id)
+                        files.deleteAll(job.entry)
+                        importNote = "Couldn’t use ${job.entry.name}"
+                        refreshAdvice()
+                        return emit()
+                    }
+                    pendingCustom = null
+                    custom[id] = entry
+                    persistCustom()
+                }
                 queue.remove(id)
-                installed[id] = Record(job.entry.sha256, clock())
+                installed[id] = Record(entry.sha256, clock())
                 persistInstalled()
+                job.found?.let { f ->
+                    found = found - f
+                    importNote = "Installed ${entry.name} from ${f.where}. You can delete the original file to free ${gb(entry.sizeBytes)}."
+                }
+                // Something new to choose from: e.g. the first voice model makes voice typing work.
+                refreshAdvice()
                 log("installed $id")
+            }
+            is InstallOutcome.Incomplete -> {
+                notes[id] = Note(ModelPack.PAUSED, "Still needed: ${outcome.missing.joinToString(", ")}")
             }
             is InstallOutcome.Paused -> if (suspended != null && !job.userCancelled && !job.import) {
                 notes[id] = Note(ModelPack.PAUSED, suspended)
@@ -464,13 +652,23 @@ class ModelService(
             } else if (job.userCancelled || job.import) {
                 queue.remove(id)
                 notes[id] = Note(ModelPack.PAUSED, "Paused")
+                if (entry.custom) { // an unverified copy can't resume: start over next time
+                    files.deleteAll(entry)
+                    custom.remove(id)
+                }
             } else {
                 notes[id] = Note(ModelPack.PAUSED, waitingReason()) // network policy: resume on networkChanged
                 resume = false
             }
             is InstallOutcome.Failed -> {
                 queue.remove(id)
-                notes[id] = Note(ModelPack.FAILED, outcome.reason)
+                if (entry.custom) {
+                    files.deleteAll(entry)
+                    custom.remove(id)
+                    importNote = "Couldn’t use ${entry.name}: ${outcome.reason}"
+                } else {
+                    notes[id] = Note(ModelPack.FAILED, outcome.reason)
+                }
                 log("install failed for $id")
             }
         }
@@ -500,7 +698,30 @@ class ModelService(
 
     private fun persistQueue() = settings.put(KEY_QUEUE, arr(queue))
 
+    private fun persistActive() = settings.put(KEY_ACTIVE, JsonObj(active.mapValues { (_, v) -> JsonStr(v) as JsonValue }))
+
+    private fun persistCustom() = settings.put(
+        KEY_CUSTOM,
+        arr(
+            custom.values.map { e ->
+                obj("id" to e.id, "name" to e.name, "file" to e.file, "sha256" to e.sha256, "sizeBytes" to e.sizeBytes)
+            },
+        ),
+    )
+
+    private fun decodeCustom(v: JsonValue): ModelEntry? {
+        val o = v.objOrNull() ?: return null
+        val id = o["id"].str()?.takeIf { it.startsWith(ModelMatcher.CUSTOM_PREFIX) } ?: return null
+        val file = o["file"].str() ?: return null
+        val sha = o["sha256"].str() ?: return null
+        val size = o["sizeBytes"].long() ?: return null
+        val found = FoundModel(id, o["name"].str() ?: "Model", ModelKind.LLM, size, "", null, mapOf(file to ""))
+        return ModelMatcher.customEntry(found, Measured(sha, size))
+    }
+
     private fun emit() = onChanged(status())
+
+    private fun gb(bytes: Long): String = if (bytes >= 1_000_000_000) "%.1f GB".format(bytes / 1e9) else "${bytes / 1_000_000} MB"
 
     private fun readCapped(input: InputStream): String {
         // InputStream.readNBytes is API 33; minSdk is 29.
@@ -523,12 +744,22 @@ class ModelService(
         const val CATALOG_UNCONFIGURED = "unconfigured"
         const val CATALOG_UNAVAILABLE = "unavailable"
         const val CATALOG_INVALID = "invalid"
+        const val ACCESS_APP = "app"
+        const val ACCESS_FOLDERS = "folders"
+        const val ACCESS_ALL = "all"
+        const val JOB_TEXT = "text"
+        const val JOB_TRANSCRIBE = "transcribe"
         const val KEY_WIFI_ONLY = "models.wifiOnly"
         const val KEY_INSTALLED = "models.installed"
         const val KEY_QUEUE = "models.queue"
+        const val KEY_CUSTOM = "models.custom"
+        const val KEY_SPEED = "models.speed"
+        const val KEY_ACTIVE = "models.active"
         const val CATALOG_TTL_MS = 6 * 60 * 60 * 1000L
+        const val RESCAN_MS = 2 * 60 * 1000L
         const val PROGRESS_EMIT_MS = 500L
         const val MAX_MANIFEST_BYTES = 256L * 1024
-        private val KIND_ORDER = listOf("llm", "vlm", "embedding", "stt", "tts")
+        private val KIND_ORDER = listOf("llm", "vlm", "stt", "embedding", "tts")
+        private val FIT_ORDER = listOf("recommended", "good", "slow", null, "too_big")
     }
 }

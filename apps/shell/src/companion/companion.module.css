@@ -338,3 +338,13 @@ textarea.field {
   place-items: center;
   border: 1px solid var(--border-strong);
 }
+/* Models: the recommended pick reads first (solid), other fits stay outlined. */
+.pillOn {
+  composes: pill;
+  background: var(--pill-bg);
+  color: var(--pill-fg);
+  border-color: var(--pill-bg);
+}
+.ghost:disabled {
+  opacity: 0.4;
+}

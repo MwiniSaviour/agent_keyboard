@@ -29,7 +29,7 @@ pkg = os.path.join(out, "com/agentkeyboard/app"); os.makedirs(os.path.join(pkg, 
 open(os.path.join(pkg, "BuildConfig.java"), "w").write(
   "package com.agentkeyboard.app;\npublic final class BuildConfig {\n"
   "  public static final boolean DEBUG = false;\n  public static final String APPLICATION_ID = \"com.agentkeyboard.app\";\n"
-  f"  public static final boolean A11Y_ACTIONS = {a11y};\n"
+  f"  public static final boolean A11Y_ACTIONS = {a11y};\n  public static final boolean ALL_FILES = {a11y};\n"
   "  public static final int VERSION_CODE = 1;\n  public static final boolean ONLINE = true;\n"
   "  public static final String MODEL_MANIFEST_URL = \"\";\n  public static final String MODEL_MANIFEST_KEYS = \"\";\n}\n")
 kinds = {}

@@ -227,6 +227,14 @@ export class WebMockBridge implements NativeBridge {
         return this.models.delete((p as ShellCommands['models.delete']).id);
       case 'models.import':
         return; // the browser has no file-picker → :agent path; the playground build is `download`
+      case 'models.use':
+        return this.models.use((p as ShellCommands['models.use']).id);
+      case 'models.scan':
+        return this.models.scanNow((p as ShellCommands['models.scan']).pick === 'folder');
+      case 'models.adopt': {
+        const { id, trust } = p as ShellCommands['models.adopt'];
+        return this.models.adopt(id, trust === true);
+      }
     }
   }
 

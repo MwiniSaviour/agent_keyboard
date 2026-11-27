@@ -95,6 +95,12 @@ class ContractFixturesTest {
                 ModelPack(
                     "gemma-3-1b-it-int4", "Gemma 3 1B", "llm", "Replies, rewriting and explanations", 584417280, "Gemma Terms of Use",
                     "https://ai.google.dev/gemma/terms", core = true, state = ModelPack.DOWNLOADING, receivedBytes = 125829120,
+                    fit = "recommended", fitDetail = "Best for this phone",
+                ),
+                ModelPack(
+                    "custom-1a2b-my-model", "My model", "llm", "Your model, found on this phone (unverified)", 104857600,
+                    "Unknown: check where it came from", null, core = false, state = ModelPack.INSTALLED, receivedBytes = 104857600,
+                    fit = "good", active = true, custom = true,
                 ),
                 ModelPack(
                     "embeddinggemma-300m", "EmbeddingGemma 300M", "embedding", "Memory and agent knowledge search", 179306496, "Gemma Terms of Use",
@@ -102,6 +108,13 @@ class ContractFixturesTest {
                 ),
             ),
             freeBytes = 21474836480, wifiOnly = true, resident = ResidentModel("gemma-3-1b-it-int4", "cpu"),
+            device = DeviceInfo(5600, "6 GB", gpu = true, soc = "SM7435"),
+            found = listOf(
+                FoundModelInfo("found-gemma-4-e2b-it", "Gemma 4 E2B", "llm", 2588147712, "Download", verified = true, entryId = "gemma-4-e2b-it"),
+                FoundModelInfo("custom-2b-other", "other", "llm", 60000000, "Documents", verified = false),
+            ),
+            scan = ModelScanInfo("idle", "folders", 1, allFilesOption = false),
+            micGranted = false,
         )
         assertEquals(res("models.status"), models.toJson())
         assertEquals((contract["events"] as JsonObj)["models.changed"], models.toJson())

@@ -11,6 +11,7 @@ import android.provider.Settings
 import android.view.inputmethod.InputMethodManager
 import com.agentkeyboard.app.Ak
 import com.agentkeyboard.app.AkLog
+import com.agentkeyboard.app.BuildConfig
 import com.agentkeyboard.app.MainActivity
 import com.agentkeyboard.app.a11y.ScreenReaderService
 import com.agentkeyboard.app.ime.AgentImeService
@@ -64,6 +65,13 @@ object SystemSettings {
                 Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS")
             }
             SystemSettingsTarget.ACCESSIBILITY -> Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+            // The keyboard can't show a permission dialog: send the user to the app's permission page.
+            SystemSettingsTarget.MICROPHONE -> Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", context.packageName, null))
+            SystemSettingsTarget.ALL_FILES -> if (BuildConfig.ALL_FILES && Build.VERSION.SDK_INT >= 30) {
+                Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.fromParts("package", context.packageName, null))
+            } else {
+                return
+            }
             SystemSettingsTarget.IME_PICKER -> return
         }
         try {

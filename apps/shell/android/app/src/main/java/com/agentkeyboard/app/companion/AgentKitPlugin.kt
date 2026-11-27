@@ -1,5 +1,6 @@
 package com.agentkeyboard.app.companion
 
+import android.Manifest
 import android.app.Activity
 import android.content.Intent
 import android.os.Handler
@@ -22,12 +23,17 @@ import com.agentkeyboard.core.protocol.ErrorCode
 import com.agentkeyboard.core.protocol.IdGenerator
 import com.agentkeyboard.core.protocol.MessageDecoder
 import com.agentkeyboard.core.protocol.PROTOCOL_VERSION
+import com.agentkeyboard.core.json.objOrNull
+import com.agentkeyboard.core.json.str
 import com.getcapacitor.JSObject
+import com.getcapacitor.PermissionState
 import com.getcapacitor.Plugin
 import com.getcapacitor.PluginCall
 import com.getcapacitor.PluginMethod
 import com.getcapacitor.annotation.ActivityCallback
 import com.getcapacitor.annotation.CapacitorPlugin
+import com.getcapacitor.annotation.Permission
+import com.getcapacitor.annotation.PermissionCallback
 
 /**
  * Companion-app transport (ADR-0003; `apps/shell/src/bridge/capacitor-bridge.ts`). Envelopes pass
@@ -37,12 +43,15 @@ import com.getcapacitor.annotation.CapacitorPlugin
  * - `system.open` / `app.open`: launcher actions that need an Activity context;
  * - `models.import`: the system file picker (needs an Activity); the picked file's descriptor goes to
  *   `:agent`, which verifies it against the signed catalog (ADR-0011);
+ * - `models.scan {pick: 'folder'}`: the folder picker; the grant is persisted and `:agent` scans it
+ *   (ADR-0012);
+ * - `system.open {target: 'microphone'}`: the runtime permission dialog (the keyboard can't show one);
  * - editor/UI commands: dropped (there is no text field to edit here).
  *
  * `:agent` addresses replies to this client's origin; they are still matched to the requests this
  * plugin sent, so a late reply to a request it already failed is dropped.
  */
-@CapacitorPlugin(name = "AgentKit")
+@CapacitorPlugin(name = "AgentKit", permissions = [Permission(strings = [Manifest.permission.RECORD_AUDIO], alias = AgentKitPlugin.MIC)])
 class AgentKitPlugin : Plugin(), AgentClient.Listener {
     private val main = Handler(Looper.getMainLooper())
     private val ids = IdGenerator("c")
@@ -62,18 +71,59 @@ class AgentKitPlugin : Plugin(), AgentClient.Listener {
             call.reject("message is required")
             return
         }
-        if (isModelImport(raw)) {
-            // Resolved by onModelPicked once the user has chosen (or dismissed) a file.
-            val pick = Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*")
-            main.post { startActivityForResult(call, pick, "onModelPicked") }
-            return
+        val env = (EnvelopeCodec.decode(raw) as? Decoded.Ok)?.envelope
+        val p = env?.payload.objOrNull()
+        when {
+            env?.type == "models.import" -> {
+                // Resolved by onModelPicked once the user has chosen (or dismissed) a file.
+                val pick = Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*")
+                main.post { startActivityForResult(call, pick, "onModelPicked") }
+                return
+            }
+            env?.type == "models.scan" && p?.get("pick").str() == "folder" -> {
+                val pick = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
+                main.post { startActivityForResult(call, pick, "onFolderPicked") }
+                return
+            }
+            env?.type == "system.open" && p?.get("target").str() == "microphone" &&
+                getPermissionState(MIC) != PermissionState.GRANTED -> {
+                main.post { requestPermissionForAlias(MIC, call, "onMicPermission") }
+                return
+            }
         }
         main.post { handle(raw) }
         call.resolve()
     }
 
-    private fun isModelImport(raw: String): Boolean =
-        (EnvelopeCodec.decode(raw) as? Decoded.Ok)?.envelope?.type == "models.import"
+    /** Persists read access to the folder (it survives restarts) and has `:agent` look in it. */
+    @ActivityCallback
+    private fun onFolderPicked(call: PluginCall, result: ActivityResult) {
+        val uri = result.data?.data
+        if (result.resultCode == Activity.RESULT_OK && uri != null) {
+            try {
+                context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            } catch (e: SecurityException) {
+                AkLog.w("companion: folder grant not persistable")
+            }
+            postToAgent("models.scan")
+        }
+        call.resolve()
+    }
+
+    @PermissionCallback
+    private fun onMicPermission(call: PluginCall) {
+        // A denial is final after the second time: from then on, only the app's settings page can grant it.
+        if (getPermissionState(MIC) != PermissionState.GRANTED && activity?.shouldShowRequestPermissionRationale(Manifest.permission.RECORD_AUDIO) == false) {
+            SystemSettings.open(activity ?: context, com.agentkeyboard.core.protocol.SystemSettingsTarget.MICROPHONE)
+        }
+        postToAgent("models.scan") // refreshes `micGranted` on the Models screen
+        call.resolve()
+    }
+
+    /** A command of the plugin's own (no reply expected). */
+    private fun postToAgent(type: String) {
+        client?.post(Envelope(PROTOCOL_VERSION, ids.next(), type, System.currentTimeMillis(), null, obj()).encode())
+    }
 
     @ActivityCallback
     private fun onModelPicked(call: PluginCall, result: ActivityResult) {
@@ -163,13 +213,14 @@ class AgentKitPlugin : Plugin(), AgentClient.Listener {
 
     private fun toJs(raw: String) = notifyListeners("message", JSObject().put("message", raw))
 
-    private companion object {
-        const val MAX_PENDING = 256
-        val EDITOR_ONLY = setOf(
+    companion object {
+        const val MIC = "microphone"
+        private const val MAX_PENDING = 256
+        private val EDITOR_ONLY = setOf(
             "text.commit", "text.delete", "text.replace", "editor.action", "editor.cursor", "feedback.key",
             "autonomy.set", "autonomy.takeover", "clipboard.paste", "form.fill", "ui.resize",
             "voice.start", "voice.stop", "voice.cancel", "screen.capture",
         )
-        val EDITOR_REQUESTS = setOf("context.snapshot", "context.scan")
+        private val EDITOR_REQUESTS = setOf("context.snapshot", "context.scan")
     }
 }

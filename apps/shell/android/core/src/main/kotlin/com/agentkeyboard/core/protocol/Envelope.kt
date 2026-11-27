@@ -74,7 +74,7 @@ object Catalog {
         "voice.start", "voice.stop", "voice.cancel", "tts.speak", "tts.stop",
         "clipboard.paste", "clipboard.pin", "clipboard.delete", "settings.set", "app.open", "form.fill",
         "agents.save", "agents.delete", "system.open", "ui.resize", "screen.capture",
-        "models.download", "models.cancel", "models.delete", "models.import",
+        "models.download", "models.cancel", "models.delete", "models.import", "models.use", "models.scan", "models.adopt",
     )
     val REQUESTS: Set<String> = linkedSetOf("hello", "context.snapshot", "context.scan", "clipboard.list", "agents.list", "system.status", "models.status")
     val EVENTS: Set<String> = linkedSetOf(

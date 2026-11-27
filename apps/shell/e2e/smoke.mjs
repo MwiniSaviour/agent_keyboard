@@ -227,19 +227,46 @@ for (const r of ['/agents/', '/agents/new/', '/models/', '/settings/', '/ime/'])
   await sleep(200);
   await page.screenshot({ path: `${shots}/page-${r.replace(/\//g, '_')}.png` });
 }
-// models: download the core pack, pause/resume, licence shown (simulated ModelService, ADR-0011)
+// models: recommendations for this (simulated 8 GB) phone, download → pause → resume, licence shown,
+// then models already on the phone: install a verified one, switch to it, trust an unknown one
+// (simulated ModelService, ADR-0011/0012)
 await page.goto(BASE + '/models/', { waitUntil: 'networkidle0' });
 await page.waitForSelector('[data-pack]');
 const lic = await page.evaluate(() => document.querySelector('[data-pack] a[href*="apache.org"]')?.textContent ?? '');
 check('models: licence surfaced', lic === 'Apache-2.0', JSON.stringify(lic));
-await clickText('button', 'Download core pack');
-await page.waitForSelector('[data-pack="gemma-4-e2b-it"][data-state="downloading"] [role="progressbar"]', { timeout: 2000 });
-await clickText('[data-pack="gemma-4-e2b-it"] button', 'Pause');
-const paused = await page.$eval('[data-pack="gemma-4-e2b-it"]', (e) => e.dataset.state);
-await clickText('[data-pack="gemma-4-e2b-it"] button', 'Resume');
-await page.waitForSelector('[data-pack="gemma-4-e2b-it"][data-state="installed"]', { timeout: 15000 }).catch(() => {});
-const installed = await page.$eval('[data-pack="gemma-4-e2b-it"]', (e) => e.dataset.state + ' · ' + e.textContent);
-check('models: download → pause → resume → installed', paused === 'paused' && /^installed · .*Installed/.test(installed), JSON.stringify([paused, installed.slice(0, 60)]));
+const recs = await page.$$eval('[data-pack]', (els) => els.filter((e) => e.textContent.includes('Recommended')).map((e) => e.dataset.pack));
+check('models: recommended for this phone (smartest text model + voice model)', recs.join() === 'gemma-4-e4b-it,zipformer-en-2023-06-26', JSON.stringify(recs));
+await clickText('button', 'Download recommended');
+await page.waitForSelector('[data-pack="gemma-4-e4b-it"][data-state="downloading"] [role="progressbar"]', { timeout: 2000 });
+await clickText('[data-pack="gemma-4-e4b-it"] button', 'Pause');
+const paused = await page.$eval('[data-pack="gemma-4-e4b-it"]', (e) => e.dataset.state);
+await clickText('[data-pack="gemma-4-e4b-it"] button', 'Resume');
+// Resume re-queues E4B behind the voice model, so wait for both.
+await page.waitForSelector('[data-pack="zipformer-en-2023-06-26"][data-state="installed"]', { timeout: 20000 }).catch(() => {});
+await page.waitForSelector('[data-pack="gemma-4-e4b-it"][data-state="installed"]', { timeout: 20000 }).catch(() => {});
+const installed = await page.$eval('[data-pack="gemma-4-e4b-it"]', (e) => e.dataset.state + ' · ' + e.textContent);
+check('models: download → pause → resume → installed, in use', paused === 'paused' && /^installed · .*In use.*Installed/.test(installed), JSON.stringify([paused, installed.slice(0, 80)]));
+
+page.on('dialog', (d) => void d.accept()); // the trust confirmation for an unknown model
+await clickText('[data-testid="found"] button', 'Scan again');
+await page.waitForSelector('[data-found]', { timeout: 3000 }).catch(() => {});
+const foundNames = await page.$$eval('[data-found]', (els) => els.map((e) => e.dataset.found));
+await clickText('[data-found="found-gemma-3-1b-it-int4"] button', 'Install');
+await page.waitForSelector('[data-pack="gemma-3-1b-it-int4"][data-state="installed"]', { timeout: 2000 }).catch(() => {});
+await clickText('[data-pack="gemma-3-1b-it-int4"] button', 'Use');
+await page.waitForFunction(() => document.querySelector('[data-pack="gemma-3-1b-it-int4"]')?.textContent.includes('In use'), { timeout: 2000 }).catch(() => {});
+const switched = await page.evaluate(() => [
+  document.querySelector('[data-pack="gemma-3-1b-it-int4"]')?.textContent.includes('In use'),
+  document.querySelector('[data-pack="gemma-4-e4b-it"]')?.textContent.includes('In use'),
+]);
+await clickText('[data-found] button', 'Use…');
+await page.waitForFunction(() => [...document.querySelectorAll('[data-pack]')].some((e) => e.textContent.includes('Qwen3-0.6B-q8')), { timeout: 2000 }).catch(() => {});
+const custom = await page.evaluate(() => [...document.querySelectorAll('[data-pack]')].find((e) => e.textContent.includes('Qwen3-0.6B-q8'))?.dataset.state ?? null);
+check(
+  'models: found on phone → install verified, use it, trust unknown',
+  foundNames.length === 2 && switched[0] === true && switched[1] === false && custom === 'installed',
+  JSON.stringify({ foundNames, switched, custom }),
+);
 await page.screenshot({ path: `${shots}/14-models.png` });
 
 // create an agent

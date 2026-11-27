@@ -57,6 +57,7 @@ import com.agentkeyboard.core.protocol.ScreenContext
 import com.agentkeyboard.core.protocol.SensitivityFlags
 import com.agentkeyboard.core.protocol.TokenCoalescer
 import com.agentkeyboard.core.json.long
+import com.agentkeyboard.core.speech.Transcript
 
 /**
  * The IME's brain, deliberately separate from the Android [AgentImeService] lifecycle so it reads as
@@ -92,6 +93,14 @@ class ImeController(private val context: Context, private val ime: ImeHost) : Br
     private val prefs = context.getSharedPreferences("ak_ime", Context.MODE_PRIVATE)
     val router = BridgeRouter(this, sink = ime::postToShell)
     val agent = AgentClient(context, this, AgentRuntime.ORIGIN_IME)
+    private val voice = VoiceTyping(context, main, object : VoiceTyping.Listener {
+        // The model's raw output is tidied against the text before the cursor (Transcript).
+        private fun tidy(text: String) = Transcript.tidy(text, Transcript.startsSentence(ime.editorState().before))
+        override fun onPartial(text: String) = router.emit("voice.partial", obj("text" to tidy(text)))
+        override fun onFinal(text: String) = router.emit("voice.final", obj("text" to tidy(text)))
+        override fun onLevel(rms: Float) = router.emit("voice.level", obj("rms" to rms.toDouble()))
+        override fun onEnd(detail: String?) = router.emit("voice.end", obj("detail" to detail))
+    })
     private val internalIds = IdGenerator("i")
     private val tokens = TokenCoalescer(32, schedule = { d, b -> main.postDelayed(b, d) }, emit = { id, d ->
         router.emit("agent.token", obj("runId" to id, "delta" to d))
@@ -160,9 +169,11 @@ class ImeController(private val context: Context, private val ime: ImeHost) : Br
             is Command.AgentRun -> forwardRun(command)
             is Command.AutonomySet -> onAutonomySet(command)
             Command.AutonomyTakeover -> apply(autonomy.dispatch(AutonomyEvent.UserTouched))
-            // No STT engine yet (Capabilities.voice=false, SPEC §13): end at once and say why.
-            is Command.VoiceStart -> router.emit("voice.end", obj("detail" to VOICE_UNAVAILABLE))
-            Command.VoiceStop, Command.VoiceCancel -> router.emit("voice.end", obj())
+            // On-device dictation (SPEC §13). `refine` (LLM clean-up of the transcript) is not applied yet:
+            // the raw transcript is inserted.
+            is Command.VoiceStart -> if (voice.installed()) voice.start() else router.emit("voice.end", obj("detail" to VoiceTyping.NO_MODEL))
+            Command.VoiceStop -> if (voice.active) voice.stop() else router.emit("voice.end", obj())
+            Command.VoiceCancel -> if (voice.active) voice.cancel() else router.emit("voice.end", obj())
             is Command.ClipboardPaste -> clipboardCache[command.id]?.let { ime.executor().submit(EditOp.Commit(it)) }
             is Command.AppOpen -> SystemSettings.openCompanion(context, command.route)
             is Command.SystemOpen -> SystemSettings.open(context, command.target)
@@ -179,7 +190,8 @@ class ImeController(private val context: Context, private val ime: ImeHost) : Br
             is Command.ClipboardDelete, is Command.AgentsSave, is Command.AgentsDelete -> forward(command)
             // Model downloads are managed from the companion's Models screen only: a keyboard must never
             // start multi-GB transfers (and :agent only starts them while the companion is visible).
-            is Command.ModelsDownload, is Command.ModelsCancel, is Command.ModelsDelete, Command.ModelsImport ->
+            is Command.ModelsDownload, is Command.ModelsCancel, is Command.ModelsDelete, Command.ModelsImport,
+            is Command.ModelsUse, is Command.ModelsScan, is Command.ModelsAdopt ->
                 AkLog.d("models.* ignored from the keyboard")
             else -> Unit
         }
@@ -297,6 +309,7 @@ class ImeController(private val context: Context, private val ime: ImeHost) : Br
     }
 
     fun onFieldFinished() {
+        voice.cancel() // dictation belongs to the field it started in
         ime.executor().flush()
         keyboardVisible = false
         updateCaptureFacts()
@@ -324,6 +337,7 @@ class ImeController(private val context: Context, private val ime: ImeHost) : Br
         main.removeCallbacksAndMessages(null)
         ScreenCapture.listener = null
         ScreenCapture.stop(context) // no keyboard, no live screen
+        voice.dispose()
         agent.close()
         forwarded.clear()
     }
@@ -334,7 +348,7 @@ class ImeController(private val context: Context, private val ime: ImeHost) : Br
         platform = "android-ime",
         tier = Ak.tier,
         nativeSuggestions = false, // the shell's predictor runs until the native one lands (§12.4)
-        voice = false, // Part 3 (sherpa-onnx)
+        voice = voice.installed(), // a speech model is installed (Models screen); the mic is checked on start
         tts = true, // system TextToSpeech in :agent
         screenContext = true, // rung 0 always; rungs 1–2 when the user grants access
         visualContext = true, // rung 3 frames from live capture (OCR/VLM read them in Part 3)
@@ -679,7 +693,6 @@ class ImeController(private val context: Context, private val ime: ImeHost) : Br
     }
 
     private companion object {
-        const val VOICE_UNAVAILABLE = "Voice typing isn’t available on this build yet."
         const val KEY_CONSENT = "autonomy.consent"
         const val KEY_CONSENT_AT = "autonomy.consent.at"
         const val KEY_CONSENT_SETTING = "autonomy.consent"
