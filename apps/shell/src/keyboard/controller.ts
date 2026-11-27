@@ -36,6 +36,8 @@ export class KeyboardController {
   private readonly predictor: Predictor = createDevPredictor(englishDevLexicon());
   private readonly unsubs: Array<() => void> = [];
   private toastTimer: ReturnType<typeof setTimeout> | null = null;
+  /** A dictation session is open natively (from `voice.start` until `voice.end`). */
+  private listening = false;
 
   constructor(
     readonly bridge: NativeBridge,
@@ -100,12 +102,25 @@ export class KeyboardController {
       b.on('voice.partial', ({ text }) => s.set((st) => ({ voice: { ...st.voice, partial: text } }))),
       b.on('voice.level', ({ rms }) => s.set((st) => ({ voice: { ...st.voice, level: rms } }))),
       b.on('voice.final', ({ text }) => this.insertSmart(text)),
-      b.on('voice.end', () => {
+      b.on('voice.end', ({ detail }) => {
+        this.listening = false; // before the panel closes, so that isn't taken for a cancel
         if (s.get().panel === 'voice') s.set({ panel: 'none' });
         s.set({ voice: { partial: '', level: 0 } });
+        // Why it ended when that wasn't the user's doing (no voice model, no mic permission, mic busy).
+        if (detail) this.toast(detail, 4500);
       }),
       b.on('agents.changed', () => void this.loadAgents()),
       b.on('theme.update', ({ systemDark }) => systemThemeStore.set({ dark: systemDark })),
+    );
+    // The mic runs only while the voice panel is open (SPEC §13.1): whatever closes or replaces the
+    // panel (another panel, an agent run, a field change) ends the session natively.
+    this.unsubs.push(
+      s.subscribe(() => {
+        if (this.listening && s.get().panel !== 'voice') {
+          this.listening = false;
+          b.send('voice.cancel', {});
+        }
+      }),
     );
     this.syncNativeSettings();
 
@@ -265,7 +280,7 @@ export class KeyboardController {
 
   closePanel(): void {
     const s = this.store.get();
-    if (s.panel === 'voice') this.bridge.send('voice.cancel', {});
+    // Leaving the voice panel cancels dictation (see the subscription in init()).
     if (s.panel === 'result' && s.run?.status === 'streaming') this.bridge.send('agent.cancel', { runId: s.run.req.runId });
     this.store.set({ panel: 'none' });
   }
@@ -403,6 +418,7 @@ export class KeyboardController {
   startVoice(): void {
     if (this.store.get().field?.sensitive) return this.toast('Voice typing is off in protected fields');
     this.store.set({ panel: 'voice', voice: { partial: '', level: 0 } });
+    this.listening = true;
     this.bridge.send('voice.start', { refine: settingsStore.get().voiceRefine });
   }
 
@@ -412,10 +428,10 @@ export class KeyboardController {
 
   // ───────────── misc ─────────────
 
-  toast(message: string): void {
+  toast(message: string, ms = 1800): void {
     this.store.set({ toast: message });
     if (this.toastTimer) clearTimeout(this.toastTimer);
-    this.toastTimer = setTimeout(() => this.store.set({ toast: null }), 1800);
+    this.toastTimer = setTimeout(() => this.store.set({ toast: null }), ms);
   }
 
   currentWord(): string {

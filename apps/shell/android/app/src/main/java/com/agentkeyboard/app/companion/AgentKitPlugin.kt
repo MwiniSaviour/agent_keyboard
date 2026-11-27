@@ -43,8 +43,9 @@ import com.getcapacitor.annotation.PermissionCallback
  * - `system.open` / `app.open`: launcher actions that need an Activity context;
  * - `models.import`: the system file picker (needs an Activity); the picked file's descriptor goes to
  *   `:agent`, which verifies it against the signed catalog (ADR-0011);
- * - `models.scan {pick: 'folder'}`: the folder picker; the grant is persisted and `:agent` scans it
- *   (ADR-0012);
+ * - `models.scan {pick: 'folder' | 'file'}`: the folder picker, or a multi-select file picker (the
+ *   only way into Download/ itself on Android 11+ without all-files access); grants are persisted and
+ *   `:agent` scans them (ADR-0012);
  * - `system.open {target: 'microphone'}`: the runtime permission dialog (the keyboard can't show one);
  * - editor/UI commands: dropped (there is no text field to edit here).
  *
@@ -85,6 +86,13 @@ class AgentKitPlugin : Plugin(), AgentClient.Listener {
                 main.post { startActivityForResult(call, pick, "onFolderPicked") }
                 return
             }
+            env?.type == "models.scan" && p?.get("pick").str() == "file" -> {
+                // Several at once: a speech model is a set of files picked together.
+                val pick = Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*")
+                    .putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+                main.post { startActivityForResult(call, pick, "onFilesPicked") }
+                return
+            }
             env?.type == "system.open" && p?.get("target").str() == "microphone" &&
                 getPermissionState(MIC) != PermissionState.GRANTED -> {
                 main.post { requestPermissionForAlias(MIC, call, "onMicPermission") }
@@ -106,6 +114,26 @@ class AgentKitPlugin : Plugin(), AgentClient.Listener {
                 AkLog.w("companion: folder grant not persistable")
             }
             postToAgent("models.scan")
+        }
+        call.resolve()
+    }
+
+    /** Persists read access to each picked file until it is copied in (released by the scanner then). */
+    @ActivityCallback
+    private fun onFilesPicked(call: PluginCall, result: ActivityResult) {
+        val data = result.data
+        if (result.resultCode == Activity.RESULT_OK && data != null) {
+            val uris = data.clipData?.let { clip -> (0 until clip.itemCount).mapNotNull { clip.getItemAt(it).uri } } ?: listOfNotNull(data.data)
+            var kept = 0
+            for (uri in uris.take(MAX_PICKED)) {
+                try {
+                    context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    kept++
+                } catch (e: SecurityException) {
+                    AkLog.w("companion: file grant not persistable")
+                }
+            }
+            if (kept > 0) postToAgent("models.scan")
         }
         call.resolve()
     }
@@ -215,6 +243,8 @@ class AgentKitPlugin : Plugin(), AgentClient.Listener {
 
     companion object {
         const val MIC = "microphone"
+        /** A speech model is ≤ 8 files (ADR-0012); more is a mis-selection. */
+        private const val MAX_PICKED = 8
         private const val MAX_PENDING = 256
         private val EDITOR_ONLY = setOf(
             "text.commit", "text.delete", "text.replace", "editor.action", "editor.cursor", "feedback.key",

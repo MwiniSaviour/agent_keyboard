@@ -58,6 +58,7 @@ import com.agentkeyboard.core.protocol.SensitivityFlags
 import com.agentkeyboard.core.protocol.TokenCoalescer
 import com.agentkeyboard.core.json.long
 import com.agentkeyboard.core.speech.Transcript
+import com.agentkeyboard.core.speech.VoiceGate
 
 /**
  * The IME's brain, deliberately separate from the Android [AgentImeService] lifecycle so it reads as
@@ -171,7 +172,10 @@ class ImeController(private val context: Context, private val ime: ImeHost) : Br
             Command.AutonomyTakeover -> apply(autonomy.dispatch(AutonomyEvent.UserTouched))
             // On-device dictation (SPEC §13). `refine` (LLM clean-up of the transcript) is not applied yet:
             // the raw transcript is inserted.
-            is Command.VoiceStart -> if (voice.installed()) voice.start() else router.emit("voice.end", obj("detail" to VoiceTyping.NO_MODEL))
+            is Command.VoiceStart -> {
+                val refusal = VoiceGate.refuseStart(isSecureField()) ?: if (!voice.installed()) VoiceTyping.NO_MODEL else null
+                if (refusal != null) router.emit("voice.end", obj("detail" to refusal)) else voice.start()
+            }
             Command.VoiceStop -> if (voice.active) voice.stop() else router.emit("voice.end", obj())
             Command.VoiceCancel -> if (voice.active) voice.cancel() else router.emit("voice.end", obj())
             is Command.ClipboardPaste -> clipboardCache[command.id]?.let { ime.executor().submit(EditOp.Commit(it)) }
@@ -290,7 +294,10 @@ class ImeController(private val context: Context, private val ime: ImeHost) : Br
 
     // ───────────── IME lifecycle hooks (called by the service) ─────────────
 
-    fun onFieldStarted(c: FieldClassification) {
+    fun onFieldStarted(c: FieldClassification, restarting: Boolean) {
+        // Moving to another field has no finish callback when the keyboard stays up: stop dictating
+        // before anything heard for the old field can be committed into this one (VoiceGate).
+        if (!VoiceGate.keepOnFieldStart(restarting, c.context.sensitive)) voice.cancel()
         // A restart of the same field (restarting=true) has no finish callback first: anything still
         // queued for this frame was typed into this field and must land, not be dropped.
         ime.executor().flush()

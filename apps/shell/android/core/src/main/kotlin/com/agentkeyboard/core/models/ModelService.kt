@@ -487,7 +487,13 @@ class ModelService(
         }
         manifest = m
         setCatalog(CATALOG_READY, null)
-        if (persist) files.cacheManifest(text)
+        if (persist) {
+            try {
+                files.cacheManifest(text)
+            } catch (e: IOException) { // disk full: the verified catalog still applies this session
+                log("catalog not cached: ${e.message}")
+            }
+        }
         return null
     }
 
@@ -557,6 +563,12 @@ class ModelService(
                 work(job)
             } catch (ex: IOException) {
                 InstallOutcome.Failed("Couldn’t read the file", retryable = true)
+            } catch (ex: RuntimeException) {
+                // A revoked folder grant (SecurityException) or a provider that went away
+                // (IllegalArgumentException/IllegalStateException): fail this job, never wedge `running`,
+                // which would block every later download and install until the process restarts.
+                log("install failed: ${ex.javaClass.simpleName}")
+                InstallOutcome.Failed("Couldn’t open the file. Pick it (or its folder) again and retry.", retryable = true)
             }
             serial.execute { finished(job, outcome) }
         }
@@ -584,7 +596,12 @@ class ModelService(
         transfer(true)
         emit()
         io.execute {
-            val outcome = installer.download(e, shouldStop = { job.stop || !allowedNow() }, onProgress = { n -> progress(job, n) })
+            val outcome = try {
+                installer.download(e, shouldStop = { job.stop || !allowedNow() }, onProgress = { n -> progress(job, n) })
+            } catch (ex: RuntimeException) { // e.g. a platform HTTP stack bug: fail the job rather than wedge the queue
+                log("download failed: ${ex.javaClass.simpleName}")
+                InstallOutcome.Failed("Download failed", retryable = true)
+            }
             serial.execute { finished(job, outcome) }
         }
     }
@@ -637,6 +654,7 @@ class ModelService(
                 persistInstalled()
                 job.found?.let { f ->
                     found = found - f
+                    scanner?.let { s -> io.execute { s.copied(f.refs.values) } }
                     importNote = "Installed ${entry.name} from ${f.where}. You can delete the original file to free ${gb(entry.sizeBytes)}."
                 }
                 // Something new to choose from: e.g. the first voice model makes voice typing work.
@@ -704,7 +722,7 @@ class ModelService(
         KEY_CUSTOM,
         arr(
             custom.values.map { e ->
-                obj("id" to e.id, "name" to e.name, "file" to e.file, "sha256" to e.sha256, "sizeBytes" to e.sizeBytes)
+                obj("id" to e.id, "name" to e.name, "sha256" to e.sha256, "sizeBytes" to e.sizeBytes)
             },
         ),
     )
@@ -712,10 +730,10 @@ class ModelService(
     private fun decodeCustom(v: JsonValue): ModelEntry? {
         val o = v.objOrNull() ?: return null
         val id = o["id"].str()?.takeIf { it.startsWith(ModelMatcher.CUSTOM_PREFIX) } ?: return null
-        val file = o["file"].str() ?: return null
         val sha = o["sha256"].str() ?: return null
         val size = o["sizeBytes"].long() ?: return null
-        val found = FoundModel(id, o["name"].str() ?: "Model", ModelKind.LLM, size, "", null, mapOf(file to ""))
+        // The copy is always stored as CUSTOM_FILE; the original name is not needed (or trusted) again.
+        val found = FoundModel(id, o["name"].str() ?: "Model", ModelKind.LLM, size, "", null, mapOf(ModelMatcher.CUSTOM_FILE to ""))
         return ModelMatcher.customEntry(found, Measured(sha, size))
     }
 

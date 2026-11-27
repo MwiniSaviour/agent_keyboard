@@ -119,6 +119,10 @@ fun entryFor(
 /** [ModelScanner] over in-memory files. */
 class FakeScanner(val files: MutableList<Pair<FoundFile, ByteArray>> = mutableListOf(), var access: String = "folders") : ModelScanner {
     var scans = 0
+    val copied = mutableListOf<String>()
+    override fun copied(refs: Collection<String>) {
+        copied += refs
+    }
     override fun scan(): ScanResult {
         scans++
         return ScanResult(files.map { it.first }, access, folders = 1)

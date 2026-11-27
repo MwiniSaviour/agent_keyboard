@@ -25,7 +25,10 @@ for (const path of ['/ime/', '/', '/agents/']) {
   // Negative control: an injected inline script must be refused.
   const injected = await page.evaluate(() => { const s = document.createElement('script'); s.textContent = 'window.__pwned = 1'; document.body.appendChild(s); return window.__pwned === 1; });
   await new Promise((r) => setTimeout(r, 200));
-  const refused = errors.slice(baseline).some((e) => e.includes('Refused to execute inline script'));
+  // The standard violation event, not console wording (Chromium changed "Refused to execute inline
+  // script" to "Executing inline script violates…" in 2026).
+  const after = await page.evaluate(() => window.__csp);
+  const refused = after.slice(csp.length).some((v) => v.startsWith('script-src') && v.endsWith(' inline'));
   const ok = hasMeta && csp.length === 0 && baseline === 0 && hydrated > 0 && !injected && refused;
   if (!ok) failed++;
   console.log(`${ok ? '✓' : '✗'} ${path} meta=${hasMeta} violations=${csp.length} bootErrors=${baseline} buttons=${hydrated} injectedRan=${injected} injectionRefused=${refused}`, errors.slice(0, baseline));

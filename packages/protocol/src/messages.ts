@@ -100,9 +100,11 @@ export interface ShellCommands {
   'models.use': { id: string };
   /**
    * Look for model files already on the phone; results arrive in `models.changed` (`found`).
-   * `pick: 'folder'` (companion only) first lets the user grant a folder to search.
+   * Companion only: `pick: 'folder'` first lets the user grant a folder to search; `pick: 'file'` lets
+   * them pick model files directly (the only way to reach Download/ itself on Android 11+ without
+   * all-files access, since the folder picker refuses its root).
    */
-  'models.scan': { pick?: 'folder' };
+  'models.scan': { pick?: 'folder' | 'file' };
   /**
    * Install a model from `found` by copying it into app storage. Unverified models need
    * `trust: true`, sent only after the user confirmed they trust the file.

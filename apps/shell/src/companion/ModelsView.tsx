@@ -100,16 +100,21 @@ export function foundAction(f: FoundModel, b: NativeBridge): NonNullable<Action>
   };
 }
 
-/** Where the scan may look, in the user's terms. */
+/**
+ * Where the scan may look, in the user's terms. Without all-files access Android 11+ shows apps none
+ * of the other files in Download/, and the folder picker can't grant Download/ itself, so the copy
+ * points at what does work: picking the files, or a folder inside Download.
+ */
 export function scanScope(s: NonNullable<ModelsStatus['scan']>): string {
+  const own = 'Agent Keyboard’s own folder (Android/data/…/files/models)';
   const folders = s.folders === 1 ? '1 folder you chose' : `${s.folders} folders you chose`;
   switch (s.access) {
     case 'all':
       return 'Looks everywhere in this phone’s storage.';
     case 'folders':
-      return `Looks in Downloads and ${folders}.`;
+      return `Looks in ${own}, ${folders} and files you picked.`;
     case 'app':
-      return 'Looks in Downloads. Choose a folder to look somewhere else.';
+      return `Looks in ${own} and files you picked. Android doesn’t let apps look through Download: pick the model files, or choose a folder inside Download.`;
   }
 }
 
@@ -160,9 +165,24 @@ function Body() {
         if (alive) setError('Model status is only available in the Agent Keyboard app.');
       }
     })();
+    // Back from system settings (microphone, all-files access) or another app (a file just
+    // downloaded): refresh, and look again since what the app may read can have changed.
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible' || !alive) return;
+      void import('@/bridge')
+        .then(({ loadBridge }) => loadBridge())
+        .then(async (b) => {
+          b.send('models.scan', {});
+          const s = await b.request('models.status', {});
+          if (alive) setStatus(s);
+        })
+        .catch(() => {});
+    };
+    document.addEventListener('visibilitychange', onVisible);
     return () => {
       alive = false;
       off?.();
+      document.removeEventListener('visibilitychange', onVisible);
     };
   }, []);
 
@@ -251,6 +271,9 @@ function Body() {
             <div className={css.row} style={{ marginTop: 12 }}>
               <button type="button" className={css.ghost} style={{ height: 38 }} disabled={scan.state === 'scanning'} onClick={() => bridge.send('models.scan', {})}>
                 Scan again
+              </button>
+              <button type="button" className={css.ghost} style={{ height: 38 }} disabled={scan.state === 'scanning'} onClick={() => bridge.send('models.scan', { pick: 'file' })}>
+                Pick files
               </button>
               <button type="button" className={css.ghost} style={{ height: 38 }} disabled={scan.state === 'scanning'} onClick={() => bridge.send('models.scan', { pick: 'folder' })}>
                 Choose folder

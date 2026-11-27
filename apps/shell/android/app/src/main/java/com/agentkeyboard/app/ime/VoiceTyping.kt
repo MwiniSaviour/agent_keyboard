@@ -29,8 +29,8 @@ import kotlin.math.sqrt
  * Silero VAD over 16 kHz microphone audio. Runs where the user is looking: an IME that is showing
  * counts as in use for microphone access, and starting the keyboard never binds `:agent`.
  *
- * Privacy: audio lives only in 100 ms buffers on [thread]; nothing is written to disk or sent
- * anywhere. The recogniser is loaded on first use and released after [IDLE_RELEASE_MS] idle.
+ * Privacy: audio lives only in two reused 100 ms buffers on [thread], zeroed after each read and when
+ * the session ends (SPEC §13.1); nothing is written to disk, logged or sent anywhere. The recogniser is loaded on first use and released after [IDLE_RELEASE_MS] idle.
  *
  * Main thread API; [Listener] callbacks arrive on the main thread.
  */
@@ -160,45 +160,58 @@ class VoiceTyping(private val context: Context, private val main: Handler, priva
             rec.startRecording()
             if (rec.recordingState != AudioRecord.RECORDSTATE_RECORDING) return MIC_BUSY
             val pcm = ShortArray(CHUNK)
+            val samples = FloatArray(CHUNK)
             val started = SystemClock.elapsedRealtime()
             var lastSpeech = started
             var shown = ""
-            while (!s.stop) {
-                val n = rec.read(pcm, 0, pcm.size)
-                if (n <= 0) return MIC_BUSY
-                val samples = FloatArray(n) { pcm[it] / 32768f }
-                var sum = 0.0
-                for (x in samples) sum += x * x
-                val rms = sqrt(sum / n).toFloat()
-                main.post { if (!s.cancelled) out.onLevel((rms * LEVEL_GAIN).coerceIn(0f, 1f)) }
+            try {
+                while (!s.stop) {
+                    val n = rec.read(pcm, 0, pcm.size)
+                    if (n <= 0) return MIC_BUSY
+                    // sherpa copies what it is given, so one reused array per size is enough.
+                    val chunk = if (n == CHUNK) samples else FloatArray(n)
+                    var sum = 0.0
+                    for (i in 0 until n) {
+                        val x = pcm[i] / 32768f
+                        chunk[i] = x
+                        sum += x * x
+                    }
+                    pcm.fill(0)
+                    val rms = sqrt(sum / n).toFloat()
+                    main.post { if (!s.cancelled) out.onLevel((rms * LEVEL_GAIN).coerceIn(0f, 1f)) }
 
-                stream.acceptWaveform(samples, SAMPLE_RATE)
-                while (eng.recognizer.isReady(stream)) eng.recognizer.decode(stream)
-                val text = eng.recognizer.getResult(stream).text.trim()
-                if (text != shown) {
-                    shown = text
-                    lastSpeech = SystemClock.elapsedRealtime()
-                    main.post { if (!s.cancelled) out.onPartial(text) }
+                    stream.acceptWaveform(chunk, SAMPLE_RATE)
+                    while (eng.recognizer.isReady(stream)) eng.recognizer.decode(stream)
+                    val text = eng.recognizer.getResult(stream).text.trim()
+                    if (text != shown) {
+                        shown = text
+                        lastSpeech = SystemClock.elapsedRealtime()
+                        main.post { if (!s.cancelled) out.onPartial(text) }
+                    }
+                    eng.vad?.let { vad ->
+                        vad.acceptWaveform(chunk)
+                        if (vad.isSpeechDetected()) lastSpeech = SystemClock.elapsedRealtime()
+                        while (!vad.empty()) vad.pop() // segments aren't needed; keep its queue empty
+                    }
+                    chunk.fill(0f)
+                    if (eng.recognizer.isEndpoint(stream)) {
+                        if (text.isNotEmpty()) main.post { if (!s.cancelled) out.onFinal(text) }
+                        eng.recognizer.reset(stream)
+                        shown = ""
+                    }
+                    val now = SystemClock.elapsedRealtime()
+                    // Nobody speaking for a while, or a very long session: stop on our own, like Gboard does.
+                    if (now - lastSpeech > SILENCE_STOP_MS || now - started > MAX_SESSION_MS) break
                 }
-                eng.vad?.let { vad ->
-                    vad.acceptWaveform(samples)
-                    if (vad.isSpeechDetected()) lastSpeech = SystemClock.elapsedRealtime()
-                    while (!vad.empty()) vad.pop() // segments aren't needed; keep its queue empty
-                }
-                if (eng.recognizer.isEndpoint(stream)) {
-                    if (text.isNotEmpty()) main.post { if (!s.cancelled) out.onFinal(text) }
-                    eng.recognizer.reset(stream)
-                    shown = ""
-                }
-                val now = SystemClock.elapsedRealtime()
-                // Nobody speaking for a while, or a very long session: stop on our own, like Gboard does.
-                if (now - lastSpeech > SILENCE_STOP_MS || now - started > MAX_SESSION_MS) break
+            } finally {
+                pcm.fill(0)
+                samples.fill(0f)
             }
             if (!s.cancelled) {
                 stream.inputFinished()
                 while (eng.recognizer.isReady(stream)) eng.recognizer.decode(stream)
                 val tail = eng.recognizer.getResult(stream).text.trim()
-                if (tail.isNotEmpty()) main.post { out.onFinal(tail) }
+                if (tail.isNotEmpty()) main.post { if (!s.cancelled) out.onFinal(tail) }
             }
             return null
         } finally {

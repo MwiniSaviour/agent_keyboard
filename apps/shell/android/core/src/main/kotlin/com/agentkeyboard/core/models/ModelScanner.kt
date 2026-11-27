@@ -41,6 +41,12 @@ interface ModelScanner {
     /** Blocking; runs on the I/O thread. Bounded by the host (depth, entries, time). */
     fun scan(): ScanResult
     fun open(ref: String): InputStream
+
+    /**
+     * [refs] were copied into app storage. The host may drop access it holds only for them (files the
+     * user picked one by one); granted folders are kept. Runs on the I/O thread.
+     */
+    fun copied(refs: Collection<String>) {}
 }
 
 /** A model the scan recognised. */
@@ -60,6 +66,11 @@ object ModelMatcher {
     /** Smaller `.litertlm` files are tokenizer/test artefacts, not models. */
     const val MIN_CUSTOM_BYTES = 50L * 1024 * 1024
     const val CUSTOM_PREFIX = "custom-"
+    /**
+     * The on-disk name of every custom model's copy. The original name comes from another app's
+     * storage (a SAF provider controls it), so it is shown to the user but never used as a path.
+     */
+    const val CUSTOM_FILE = "model.litertlm"
 
     /**
      * [installed] maps model id → the fingerprint installed now, so a file identical to what is already
@@ -117,14 +128,13 @@ object ModelMatcher {
      * a 1024-token context (fits any export), the GPU only after ModelManager's crash-safe probe.
      */
     fun customEntry(found: FoundModel, measured: Measured?): ModelEntry {
-        val fileName = found.refs.keys.single()
         val size = measured?.sizeBytes ?: found.sizeBytes
         return ModelEntry(
             id = found.id,
             kind = ModelKind.LLM,
             name = found.name,
             role = "Your model, found on this phone (unverified)",
-            files = listOf(ModelFile(fileName, "file://local", measured?.sha256 ?: "0".repeat(64), size)),
+            files = listOf(ModelFile(CUSTOM_FILE, "file://local", measured?.sha256 ?: "0".repeat(64), size)),
             license = "Unknown: check where it came from",
             licenseUrl = null,
             tiers = DeviceTier.entries.toSet(),

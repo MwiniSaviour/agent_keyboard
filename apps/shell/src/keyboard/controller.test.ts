@@ -65,6 +65,37 @@ describe('KeyboardController', () => {
     expect(store.get().toast).toMatch(/protected/i);
   });
 
+  it('leaving the voice panel any way other than its own buttons stops the microphone', async () => {
+    const { c, bridge, store, dispose } = await setup();
+    cleanup = dispose;
+    const sent: string[] = [];
+    const send = bridge.send.bind(bridge);
+    bridge.send = ((t: never, p: never) => (sent.push(t), send(t, p))) as typeof bridge.send;
+    c.startVoice();
+    expect(store.get().panel).toBe('voice');
+    c.openPanel('clipboard'); // replaces the voice panel
+    expect(sent.filter((t) => t.startsWith('voice.'))).toEqual(['voice.start', 'voice.cancel']);
+    // Exactly once, and not again when the session's own end arrives or other panels change.
+    c.openPanel('clipboard');
+    c.startVoice();
+    c.closePanel();
+    await tick(5);
+    expect(sent.filter((t) => t.startsWith('voice.'))).toEqual(['voice.start', 'voice.cancel', 'voice.start', 'voice.cancel']);
+  });
+
+  it('says why voice typing ended when it was not the user’s doing', async () => {
+    const { c, bridge, store, dispose } = await setup();
+    cleanup = dispose;
+    const sent: string[] = [];
+    const send = bridge.send.bind(bridge);
+    bridge.send = ((t: never, p: never) => (sent.push(t), send(t, p))) as typeof bridge.send;
+    c.startVoice();
+    (bridge as unknown as { emit: (t: string, p: unknown) => void }).emit('voice.end', { detail: 'Download a voice model first.' });
+    expect(store.get().panel).toBe('none');
+    expect(store.get().toast).toBe('Download a voice model first.');
+    expect(sent).not.toContain('voice.cancel'); // native already ended it
+  });
+
   it('requires consent before enabling autonomy', async () => {
     const { c, store, dispose } = await setup();
     cleanup = dispose;

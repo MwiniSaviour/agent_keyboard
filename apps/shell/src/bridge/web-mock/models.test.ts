@@ -131,7 +131,7 @@ describe('MockModels', () => {
     const custom = last!.packs.find((p) => p.custom)!;
     expect(custom).toMatchObject({ name: 'Qwen3-0.6B-q8', state: 'installed', fit: 'good', core: false });
     expect(last!.found).toBeUndefined();
-    m.scanNow(true);
+    m.scanNow('folder');
     vi.advanceTimersByTime(1_000);
     expect(last!.found).toBeUndefined(); // both are installed now
     expect(last!.scan).toMatchObject({ access: 'folders', folders: 1 });
@@ -196,6 +196,9 @@ describe('Models screen helpers', () => {
     expect(sent.at(-1)).toEqual(['models.adopt', { id: 'f' }]);
     vi.unstubAllGlobals();
     expect(scanScope({ state: 'idle', access: 'folders', folders: 1, allFilesOption: false })).toMatch(/1 folder you chose/);
+    // Never promises Download/ without all-files access (Android 11+ hides it from apps).
+    expect(scanScope({ state: 'idle', access: 'app', folders: 0, allFilesOption: false })).toMatch(/doesn’t let apps look through Download: pick the model files/);
+    expect(scanScope({ state: 'idle', access: 'all', folders: 0, allFilesOption: true })).toMatch(/everywhere/);
   });
 
   it('explains an unusable catalog', () => {

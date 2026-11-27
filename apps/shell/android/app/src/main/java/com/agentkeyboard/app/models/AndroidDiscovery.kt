@@ -70,7 +70,7 @@ data class SttPointer(
         fun publish(context: Context, model: InstalledModel?) {
             val target = file(context)
             if (model == null) {
-                target.delete()
+                if (!target.delete() && target.exists()) throw IOException("couldn't clear the voice model pointer")
                 return
             }
             val c = model.entry.config
@@ -110,6 +110,9 @@ data class SttPointer(
  * Lists candidate model files in places this app may read, bounded in depth, entries and time:
  *  - its own external folder (`Android/data/<pkg>/files/models`), where files can be copied over USB;
  *  - folders the user granted from the Models screen (Storage Access Framework, persisted);
+ *  - files the user picked one by one (persisted document grants; released once copied). Android 11+
+ *    won't let the folder picker grant Download/ itself, so this is how Play builds reach a model
+ *    sitting directly in Download/;
  *  - with all-files access (`full` builds only, the user's choice): Download, Documents and the
  *    other top-level folders of shared storage.
  * Only names that can be part of a model are reported; nothing is opened until the user adopts one.
@@ -128,7 +131,13 @@ class AndroidModelScanner(private val context: Context, private val allFilesOpti
             val models = File(appDir, "models").apply { mkdirs() }
             walkFiles(models, "Agent Keyboard/models", 0, walk)
         }
-        val trees = context.contentResolver.persistedUriPermissions.filter { it.isReadPermission }.map { it.uri }
+        val grants = context.contentResolver.persistedUriPermissions.filter { it.isReadPermission }.map { it.uri }
+        // A tree grant is a folder; anything else is a single document the user picked.
+        val (trees, docs) = grants.partition { DocumentsContract.isTreeUri(it) }
+        for (doc in docs) {
+            if (walk.exhausted) break
+            pickedFile(doc, walk)
+        }
         for (tree in trees) {
             if (walk.exhausted) break
             try {
@@ -176,6 +185,38 @@ class AndroidModelScanner(private val context: Context, private val allFilesOpti
         }
     }
 
+    /** One picked document. Grants for files that can't be part of a model are released at once. */
+    private fun pickedFile(doc: Uri, walk: Walk) {
+        val cols = arrayOf(DocumentsContract.Document.COLUMN_DISPLAY_NAME, DocumentsContract.Document.COLUMN_SIZE)
+        val row = try {
+            context.contentResolver.query(doc, cols, null, null, null)?.use { c ->
+                if (c.moveToFirst()) (c.getString(0) ?: "") to (if (c.isNull(1)) -1L else c.getLong(1)) else null
+            }
+        } catch (e: RuntimeException) { // deleted, or the provider is gone
+            null
+        }
+        walk.visited++
+        if (row == null || !candidate(row.first, row.second)) {
+            release(doc)
+            return
+        }
+        // Picked together → one "folder", so all the files of a speech model can be matched as a set.
+        walk.out += FoundFile(doc.toString(), row.first, row.second, PICKED_FOLDER, "Files you picked")
+    }
+
+    override fun copied(refs: Collection<String>) {
+        val docs = context.contentResolver.persistedUriPermissions.filter { !DocumentsContract.isTreeUri(it.uri) }.map { it.uri.toString() }.toSet()
+        refs.filter { it in docs }.forEach { release(Uri.parse(it)) }
+    }
+
+    private fun release(doc: Uri) {
+        try {
+            context.contentResolver.releasePersistableUriPermission(doc, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        } catch (e: SecurityException) {
+            // Already gone.
+        }
+    }
+
     private fun walkTree(tree: Uri, parentId: String, where: String, depth: Int, walk: Walk) {
         if (depth > MAX_DEPTH || walk.exhausted) return
         val children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, parentId)
@@ -216,6 +257,7 @@ class AndroidModelScanner(private val context: Context, private val allFilesOpti
 
     private companion object {
         const val FILE_REF = "file:"
+        const val PICKED_FOLDER = "picked"
         const val MAX_DEPTH = 5
         const val MAX_ENTRIES = 20_000
         const val MAX_RESULTS = 500

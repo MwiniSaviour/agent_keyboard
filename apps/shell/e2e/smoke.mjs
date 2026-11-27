@@ -247,6 +247,14 @@ await page.waitForSelector('[data-pack="gemma-4-e4b-it"][data-state="installed"]
 const installed = await page.$eval('[data-pack="gemma-4-e4b-it"]', (e) => e.dataset.state + ' · ' + e.textContent);
 check('models: download → pause → resume → installed, in use', paused === 'paused' && /^installed · .*In use.*Installed/.test(installed), JSON.stringify([paused, installed.slice(0, 80)]));
 
+// Without all-files access the scan can't see Download/ (Android 11+): the screen must say so and offer
+// picking the files instead of promising a Downloads search.
+const scope = await page.$eval('[data-testid="found"]', (e) => e.textContent);
+check(
+  'models: honest scan scope, with Pick files',
+  /pick the model files/.test(scope) && !/Looks in Downloads/.test(scope) && /Pick files/.test(scope),
+  JSON.stringify(scope.slice(0, 160)),
+);
 page.on('dialog', (d) => void d.accept()); // the trust confirmation for an unknown model
 await clickText('[data-testid="found"] button', 'Scan again');
 await page.waitForSelector('[data-found]', { timeout: 3000 }).catch(() => {});
